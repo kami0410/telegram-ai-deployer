@@ -1,0 +1,42 @@
+:root { color-scheme: light dark; font-family: "Segoe UI", system-ui, sans-serif; --bg:#f4f6f8; --panel:#fff; --text:#15202b; --muted:#627080; --line:#dce2e8; --accent:#1565d8; --accent2:#0d47a1; --soft:#eaf2ff; --danger:#b42318; }
+* { box-sizing:border-box; }
+body { margin:0; background:linear-gradient(145deg,#edf3fb 0%,var(--bg) 42%); color:var(--text); min-height:100vh; }
+button,input { font:inherit; }
+button { min-height:44px; padding:.65rem 1.1rem; border:0; border-radius:.65rem; background:var(--accent); color:#fff; font-weight:650; cursor:pointer; }
+button:hover { background:var(--accent2); }
+button:focus-visible,input:focus-visible { outline:3px solid #69a7ff; outline-offset:2px; }
+button:disabled { opacity:.45; cursor:not-allowed; }
+.secondary { background:transparent; color:var(--accent); border:1px solid var(--line); }
+.text-button { background:transparent; color:var(--accent); padding-inline:0; }
+.shell { width:min(920px,calc(100% - 32px)); margin:32px auto; }
+.hero { padding:8px 8px 24px; }
+.hero h1 { margin:.2rem 0 .6rem; font-size:clamp(1.8rem,4vw,2.7rem); letter-spacing:-.035em; }
+.hero p { color:var(--muted); max-width:700px; line-height:1.6; }
+.eyebrow { color:var(--accent)!important; font-weight:750; letter-spacing:.12em; }
+.stepper { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; list-style:none; padding:0; margin:0 0 14px; }
+.stepper li { padding:10px; text-align:center; color:var(--muted); border-bottom:3px solid var(--line); }
+.stepper [aria-current="step"] { color:var(--accent); border-color:var(--accent); font-weight:700; }
+section { background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:clamp(22px,4vw,38px); box-shadow:0 16px 50px #17324d12; }
+.section-heading { display:flex; gap:14px; align-items:flex-start; margin-bottom:28px; }
+.section-heading>span { color:var(--accent); font-weight:800; }
+h2 { margin:0 0 5px; }
+.section-heading p { margin:0; color:var(--muted); }
+.status-card { border:1px solid var(--line); background:var(--soft); padding:18px; border-radius:12px; margin:16px 0; }
+.grid { display:grid; gap:14px; margin:18px 0; }
+.grid.two { grid-template-columns:1fr 1.4fr; }
+label { display:grid; gap:7px; font-weight:600; }
+input[type="text"],input:not([type]) ,input[type="password"] { min-height:44px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); }
+fieldset { border:0; padding:0; margin:0; display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+legend { font-weight:700; margin-bottom:10px; }
+.choice { display:flex; align-items:center; gap:10px; border:1px solid var(--line); border-radius:12px; padding:15px; }
+.choice span { display:grid; gap:3px; }.choice small { color:var(--muted); font-weight:400; }
+.toggle,.consent { display:flex; align-items:flex-start; gap:10px; margin:18px 0; line-height:1.5; }
+.actions { display:flex; justify-content:space-between; gap:12px; margin-top:28px; }
+.summary { display:grid; grid-template-columns:120px 1fr; margin:0; border-top:1px solid var(--line); }
+.summary dt,.summary dd { margin:0; padding:11px; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }.summary dt { color:var(--muted); }
+.progress { padding-left:24px; line-height:1.8; }.progress [data-status="failed"] { color:var(--danger); }
+pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:210px; overflow:auto; background:#111827; color:#d7e4f2; padding:14px; border-radius:10px; font-size:.82rem; }
+dialog { width:min(760px,calc(100% - 28px)); max-height:85vh; border:0; border-radius:16px; padding:0; background:var(--panel); color:var(--text); }dialog::backdrop { background:#0f172a99; }dialog article { padding:24px; }dialog pre { max-height:58vh; background:transparent; color:inherit; }
+@media (prefers-color-scheme:dark){:root{--bg:#0b1220;--panel:#111b2c;--text:#edf4ff;--muted:#a3b2c6;--line:#2c3b50;--soft:#132a49;}}
+@media (max-width:700px){.shell{width:min(100% - 18px,920px);margin:12px auto}.grid.two,fieldset{grid-template-columns:1fr}.stepper li{font-size:.78rem;padding:7px 2px}.summary{grid-template-columns:90px 1fr}}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}

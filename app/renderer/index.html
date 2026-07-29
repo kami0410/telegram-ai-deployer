@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Cloudflare Telegram AI Bot Deployer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <p class="eyebrow">本地部署向导</p>
+      <h1>把 Telegram AI 机器人部署到 Cloudflare</h1>
+      <p>密钥只在本机内存和 Cloudflare Wrangler 进程中短暂使用，不写入项目或部署状态。</p>
+    </header>
+
+    <nav aria-label="部署进度">
+      <ol class="stepper">
+        <li data-step-indicator="1" aria-current="step">环境</li>
+        <li data-step-indicator="2">人格</li>
+        <li data-step-indicator="3">配置</li>
+        <li data-step-indicator="4">确认</li>
+        <li data-step-indicator="5">部署</li>
+      </ol>
+    </nav>
+
+    <form id="wizard" novalidate>
+      <section data-step="1">
+        <div class="section-heading"><span>01</span><div><h2>检查本机环境</h2><p>需要 Node.js、Wrangler 和已登录的 Cloudflare 账户。</p></div></div>
+        <div id="environmentStatus" class="status-card" aria-live="polite">尚未检查</div>
+        <button id="checkEnvironment" type="button">开始检查</button>
+        <div class="actions"><span></span><button class="next" type="button">下一步</button></div>
+      </section>
+
+      <section data-step="2" hidden>
+        <div class="section-heading"><span>02</span><div><h2>导入人格 Prompt</h2><p>可选 TXT、Markdown 或 JSON；文件只复制到你生成的私有项目。</p></div></div>
+        <input id="personaPath" name="personaPath" type="text" readonly placeholder="未选择，将使用通用人格">
+        <button id="selectPersona" type="button" class="secondary">选择文件</button>
+        <div class="actions"><button class="back secondary" type="button">上一步</button><button class="next" type="button">下一步</button></div>
+      </section>
+
+      <section data-step="3" hidden>
+        <div class="section-heading"><span>03</span><div><h2>机器人配置</h2><p>Flash 成本更低；Pro 更适合复杂推理。思考模式会增加延迟和消耗。</p></div></div>
+        <fieldset><legend>DeepSeek 模型</legend>
+          <label class="choice"><input type="radio" name="model" value="deepseek-v4-flash" checked><span><strong>V4 Flash</strong><small>默认 · 更快更省</small></span></label>
+          <label class="choice"><input type="radio" name="model" value="deepseek-v4-pro"><span><strong>V4 Pro</strong><small>复杂任务质量优先</small></span></label>
+        </fieldset>
+        <label class="toggle"><input id="thinking" type="checkbox"><span>启用思考模式</span></label>
+        <div class="grid two">
+          <label>项目名称<input id="projectName" required value="my-telegram-bot" autocomplete="off" pattern="[a-z][a-z0-9-]{1,39}"></label>
+          <label>生成目录<input id="outputDir" required placeholder="C:\Bots" autocomplete="off"></label>
+        </div>
+        <div class="grid">
+          <label>Telegram Bot Token<input id="telegramToken" type="password" required autocomplete="off" spellcheck="false"></label>
+          <label>DeepSeek API Key<input id="deepseekKey" type="password" required autocomplete="off" spellcheck="false"></label>
+          <label>迁移密钥（8–32 位）<input id="pairingCode" type="password" required minlength="8" maxlength="32" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <div class="actions"><button class="back secondary" type="button">上一步</button><button class="next" type="button">下一步</button></div>
+      </section>
+
+      <section data-step="4" hidden>
+        <div class="section-heading"><span>04</span><div><h2>确认部署</h2><p>将创建 Worker、D1、Queues 和 Vectorize；Cloudflare 与模型服务费用由你承担。</p></div></div>
+        <dl id="summary" class="summary"></dl>
+        <label class="consent"><input id="acceptDisclaimer" type="checkbox"><span>我已阅读并接受免责声明、隐私说明以及第三方服务条款和费用风险。</span></label>
+        <button id="showDisclaimer" type="button" class="text-button">查看完整免责声明</button>
+        <div class="actions"><button class="back secondary" type="button">上一步</button><button id="deploy" type="submit" disabled>开始部署</button></div>
+      </section>
+
+      <section data-step="5" hidden>
+        <div class="section-heading"><span>05</span><div><h2>部署进度</h2><p>可关闭后重新运行并恢复；恢复时必须重新输入三个密钥。</p></div></div>
+        <div id="deploymentStatus" class="status-card" aria-live="polite">等待开始</div>
+        <ol id="progress" class="progress"></ol>
+        <pre id="log" aria-label="脱敏部署日志"></pre>
+        <div class="actions"><button id="openOutput" class="secondary" type="button" disabled>打开项目目录</button><button id="resume" type="button" disabled>恢复部署</button></div>
+      </section>
+    </form>
+  </main>
+
+  <dialog id="notice"><article><h2>免责声明</h2><pre id="noticeText"></pre><button id="closeNotice" type="button">关闭</button></article></dialog>
+  <script type="module" src="app.mjs"></script>
+</body>
+</html>
