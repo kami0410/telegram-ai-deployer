@@ -43,11 +43,12 @@ function Assert-GitStructuredClean {
     }
   }
   $secretAssignment = '(TOKEN|API_KEY|SECRET)[[:space:]]*[:=][[:space:]]*["''][A-Za-z0-9_-]{16,}'
-  $secretLines = @(& git grep -I -h -E $secretAssignment $Commit -- . @excludedPaths)
+  $secretLines = @(& git grep -I -h -i -E $secretAssignment $Commit -- . @excludedPaths)
   $secretDotNet = '(TOKEN|API_KEY|SECRET)\s*[:=]\s*["'']([A-Za-z0-9_-]{16,})'
+  $reviewedFixtureSecrets = @('test-only-telegram-token', 'test-only-deepseek-key', 'test-only-webhook-secret', 'example-telegram-token-that-is-not-valid')
   foreach ($line in $secretLines) {
-    foreach ($match in [regex]::Matches($line, $secretDotNet)) {
-      if ($match.Groups[2].Value -notmatch '^(test-only-|example-|public-)') { throw "Git history contains a literal secret assignment." }
+    foreach ($match in [regex]::Matches($line, $secretDotNet, [Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+      if ($match.Groups[2].Value -notin $reviewedFixtureSecrets) { throw "Git history contains a literal secret assignment." }
     }
   }
   $paths = @(& git ls-tree -r --name-only $Commit)

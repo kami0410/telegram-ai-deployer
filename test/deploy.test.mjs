@@ -87,6 +87,14 @@ test("failures before template persistence are not advertised as resumable", asy
   }
 });
 
+test("a failed initial state write is not advertised as resumable", async () => {
+  const fixture = fakeDependencies();
+  fixture.dependencies.writeState = async () => { throw new Error("state-write-failed"); };
+  await assert.rejects(() => runDeployment(exampleInput, fixture.dependencies), /state-write-failed/u);
+  assert.equal(fixture.events.at(-1).step, "template");
+  assert.equal(fixture.events.at(-1).recoverable, false);
+});
+
 test("resume skips completed steps but requires freshly supplied secrets", async () => {
   const existingState = {
     version: 1,

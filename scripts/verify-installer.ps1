@@ -9,6 +9,9 @@ if ($installers.Count -ne 1) {
   throw "Expected exactly one installer in dist, found $($installers.Count)."
 }
 if ($archives.Count -ne 1) { throw "Expected exactly one ZIP archive in dist, found $($archives.Count)." }
+foreach ($artifact in @($installers[0], $archives[0])) {
+  if ($artifact.Length -le 0) { throw "Release artifact is empty: $($artifact.Name)" }
+}
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 $testRoot = Join-Path $tempBase ("cloudflare-bot-deployer-verify-" + [Guid]::NewGuid().ToString("N"))

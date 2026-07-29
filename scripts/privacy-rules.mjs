@@ -11,14 +11,20 @@ const genericRules = [
 ];
 const uuidPattern = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/igu;
 const emailPattern = /\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b/igu;
-const secretAssignmentPattern = /(?:TOKEN|API_KEY|SECRET)\s*[:=]\s*["']([A-Za-z0-9_-]{16,})["']/gu;
+const secretAssignmentPattern = /(?:TOKEN|API_KEY|SECRET)\s*[:=]\s*["']([A-Za-z0-9_-]{16,})["']/giu;
+const reviewedFixtureSecrets = new Set([
+  "test-only-telegram-token",
+  "test-only-deepseek-key",
+  "test-only-webhook-secret",
+  "example-telegram-token-that-is-not-valid",
+]);
 
 export function detectSensitive(text, filename = "") {
   const value = String(text);
   const findings = genericRules.filter(([, pattern]) => pattern.test(value)).map(([rule]) => rule);
   if ([...value.matchAll(uuidPattern)].some((match) => match[0] !== "00000000-0000-0000-0000-000000000000")) findings.push("non-placeholder-uuid");
   if ([...value.matchAll(emailPattern)].some((match) => !["example.invalid", "example.com"].includes(match[1].toLowerCase()))) findings.push("non-example-email");
-  if ([...value.matchAll(secretAssignmentPattern)].some((match) => !/^(?:test-only-|example-|public-)/u.test(match[1]))) findings.push("secret-assignment");
+  if ([...value.matchAll(secretAssignmentPattern)].some((match) => !reviewedFixtureSecrets.has(match[1]))) findings.push("secret-assignment");
   if (/chat[_ -]?export/iu.test(filename)) findings.push("chat-export");
   return [...new Set(findings)];
 }

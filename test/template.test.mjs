@@ -40,6 +40,16 @@ test("refuses to merge a fresh deployment into a non-empty directory", async () 
   );
 });
 
+test("copies a template installed below an ancestor named dist", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "deployer-template-ancestor-"));
+  const source = path.join(root, "dist", "installed-app", "template");
+  const output = path.join(root, "output");
+  await mkdir(path.join(source, "src", "persona"), { recursive: true });
+  await writeFile(path.join(source, "package.json"), "{\"name\":\"safe-template\"}");
+  await generateProject({ templateRoot: source, outputDir: output, personaText: "test" });
+  assert.equal(await readFile(path.join(output, "package.json"), "utf8"), "{\"name\":\"safe-template\"}");
+});
+
 test("renders selected model and thinking mode without secrets", () => {
   const config = renderWranglerConfig({
     names: {

@@ -28,6 +28,7 @@ test("installer verifier checks custom path, launch, resources, uninstall, and h
     assert.match(script, new RegExp(marker, "u"));
   }
   assert.match(script, /\*\.zip/u);
+  assert.match(script, /Length\s*-le\s*0/u);
 });
 
 test("packaged runtime resolves native esbuild only from Electron's unpacked resources", async () => {
