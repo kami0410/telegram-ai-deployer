@@ -14,7 +14,50 @@
     "test": "node --test test/*.test.mjs",
     "privacy:scan": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/privacy-scan.ps1",
     "start": "electron .",
-    "package": "electron-forge package",
-    "make": "electron-forge make"
+    "package": "electron-builder --dir",
+    "make": "electron-builder --win nsis zip"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3",
+    "wrangler": "4.114.0"
+  },
+  "build": {
+    "appId": "dev.opensource.cloudflare-telegram-ai-bot-deployer",
+    "productName": "Cloudflare Telegram AI Bot Deployer",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "app/**/*",
+      "lib/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "template",
+        "to": "template"
+      },
+      {
+        "from": "DISCLAIMER.md",
+        "to": "DISCLAIMER.md"
+      },
+      {
+        "from": "DISCLAIMER_ZH.md",
+        "to": "DISCLAIMER_ZH.md"
+      }
+    ],
+    "win": {
+      "target": ["nsis", "zip"],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }
