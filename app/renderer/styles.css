@@ -37,6 +37,7 @@ legend { font-weight:700; margin-bottom:10px; }
 .progress { padding-left:24px; line-height:1.8; }.progress [data-status="failed"] { color:var(--danger); }
 pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:210px; overflow:auto; background:#111827; color:#d7e4f2; padding:14px; border-radius:10px; font-size:.82rem; }
 dialog { width:min(760px,calc(100% - 28px)); max-height:85vh; border:0; border-radius:16px; padding:0; background:var(--panel); color:var(--text); }dialog::backdrop { background:#0f172a99; }dialog article { padding:24px; }dialog pre { max-height:58vh; background:transparent; color:inherit; }
+footer { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:18px 8px; color:var(--muted); font-size:.88rem; }
 @media (prefers-color-scheme:dark){:root{--bg:#0b1220;--panel:#111b2c;--text:#edf4ff;--muted:#a3b2c6;--line:#2c3b50;--soft:#132a49;}}
 @media (max-width:700px){.shell{width:min(100% - 18px,920px);margin:12px auto}.grid.two,fieldset{grid-template-columns:1fr}.stepper li{font-size:.78rem;padding:7px 2px}.summary{grid-template-columns:90px 1fr}}
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}

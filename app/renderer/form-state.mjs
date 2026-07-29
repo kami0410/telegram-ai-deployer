@@ -29,3 +29,16 @@ export function consumeDeploymentForm(secretControls, values) {
 export function clearPayloadSecrets(payload) {
   for (const key of ["telegramToken", "deepseekKey", "pairingCode"]) payload[key] = "";
 }
+
+export function applyProgress(state, event) {
+  const completedSteps = [...state.completedSteps ?? []];
+  if (event.status === "succeeded" && !completedSteps.includes(event.step)) completedSteps.push(event.step);
+  return {
+    ...state,
+    completedSteps,
+    recoverable: event.recoverable === true,
+    lastStep: String(event.step ?? ""),
+    lastStatus: String(event.status ?? ""),
+    lastMessage: String(event.message ?? "").replace(/\s+/gu, " ").trim().slice(0, 2_000),
+  };
+}

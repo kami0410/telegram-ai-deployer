@@ -13,6 +13,7 @@ let currentStep = 1;
 let personaPath = "";
 let outputDir = "";
 let running = false;
+let resumeMode = false;
 
 function showStep(step) {
   currentStep = Math.max(1, Math.min(5, step));
@@ -94,6 +95,7 @@ async function submit(resume = false) {
     document.querySelector("#deploymentStatus").textContent = `部署完成：${response.result.workerUrl ?? "Cloudflare Worker 已创建"}`;
     document.querySelector("#openOutput").disabled = false;
     document.querySelector("#resume").disabled = true;
+    resumeMode = false;
   } catch {
     document.querySelector("#deploymentStatus").textContent = "部署未完成。日志已脱敏，可重新填写密钥后恢复。";
     document.querySelector("#resume").disabled = false;
@@ -103,12 +105,12 @@ async function submit(resume = false) {
   }
 }
 
-form.addEventListener("submit", (event) => { event.preventDefault(); void submit(false); });
-document.querySelector("#resume").addEventListener("click", () => showStep(3));
+form.addEventListener("submit", (event) => { event.preventDefault(); void submit(resumeMode); });
+document.querySelector("#resume").addEventListener("click", () => { resumeMode = true; showStep(3); });
 document.querySelector("#openOutput").addEventListener("click", () => { if (outputDir) void api.openOutputFolder(outputDir); });
 
 const notice = document.querySelector("#notice");
-document.querySelector("#showDisclaimer").addEventListener("click", async () => {
+for (const button of document.querySelectorAll("[data-disclaimer-button]")) button.addEventListener("click", async () => {
   document.querySelector("#noticeText").textContent = await api.readDisclaimer("zh");
   notice.showModal();
 });

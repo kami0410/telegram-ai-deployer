@@ -63,7 +63,7 @@
         <div class="section-heading"><span>04</span><div><h2>确认部署</h2><p>将创建 Worker、D1、Queues 和 Vectorize；Cloudflare 与模型服务费用由你承担。</p></div></div>
         <dl id="summary" class="summary"></dl>
         <label class="consent"><input id="acceptDisclaimer" type="checkbox"><span>我已阅读并接受免责声明、隐私说明以及第三方服务条款和费用风险。</span></label>
-        <button id="showDisclaimer" type="button" class="text-button">查看完整免责声明</button>
+        <button id="showDisclaimer" data-disclaimer-button type="button" class="text-button">查看完整免责声明</button>
         <div class="actions"><button class="back secondary" type="button">上一步</button><button id="deploy" type="submit" disabled>开始部署</button></div>
       </section>
 
@@ -75,6 +75,7 @@
         <div class="actions"><button id="openOutput" class="secondary" type="button" disabled>打开项目目录</button><button id="resume" type="button" disabled>恢复部署</button></div>
       </section>
     </form>
+    <footer><button data-disclaimer-button type="button" class="text-button">关于、隐私与免责声明</button><span>无遥测 · 无远程页面 · 本地生成</span></footer>
   </main>
 
   <dialog id="notice"><article><h2>免责声明</h2><pre id="noticeText"></pre><button id="closeNotice" type="button">关闭</button></article></dialog>
