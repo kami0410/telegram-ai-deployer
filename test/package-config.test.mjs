@@ -6,6 +6,7 @@ test("Windows package has x64 installer, archive, and selectable destination", a
   const packageJson = JSON.parse(await readFile("package.json", "utf8"));
   assert.match(packageJson.scripts.make, /--x64/u);
   assert.deepEqual(packageJson.build.win.target, ["nsis", "zip"]);
+  assert.equal(packageJson.build.win.artifactName, "Telegram.AI.Deployer-${version}-${arch}.${ext}");
   assert.equal(packageJson.build.nsis.oneClick, false);
   assert.equal(packageJson.build.nsis.allowToChangeInstallationDirectory, true);
   assert.equal(packageJson.build.nsis.perMachine, false);
