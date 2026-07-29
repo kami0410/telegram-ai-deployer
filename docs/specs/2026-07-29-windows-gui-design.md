@@ -8,7 +8,7 @@
 
 - 开源仓库只包含通用模板、占位符和虚构测试数据。
 - 不包含任何真实用户名、机器人名称、域名、Cloudflare 资源 ID、Token、API Key、聊天记录或人格资料。
-- Telegram Token、DeepSeek Key、配对码和 Webhook Secret 只在 Electron 主进程内短暂存在。
+- Telegram Token、DeepSeek Key 和配对码只在本地密码输入控件中短暂存在，提交后立即从 Renderer 表单清空并仅由 Electron 主进程继续持有；自动生成的 Webhook Secret 只存在于主进程。
 - 密钥通过 `wrangler secret bulk` 的标准输入写入 Cloudflare，不写入磁盘、页面状态或日志。
 - 导入的人格 Prompt 只写入用户生成工程中被 `.gitignore` 排除的文件；界面和日志只显示文件名与字符数，不显示正文。
 - 发布前扫描工作树、Git 历史、安装包内容和一次虚构数据生成结果。
