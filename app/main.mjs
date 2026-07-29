@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerIpc } from "./ipc.mjs";
@@ -6,6 +7,7 @@ import { registerIpc } from "./ipc.mjs";
 const appDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(appDirectory, "..");
 const smokeTest = process.argv.includes("--smoke-test");
+const smokeOutput = process.argv.find((argument) => argument.startsWith("--smoke-test-output="))?.slice("--smoke-test-output=".length);
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -32,7 +34,8 @@ function createWindow() {
 
 app.whenReady().then(() => {
   if (smokeTest) {
-    process.stdout.write("main-window-ready\n");
+    process.stdout?.write("main-window-ready\n");
+    if (smokeOutput && path.isAbsolute(smokeOutput)) writeFileSync(smokeOutput, "main-window-ready\n", "utf8");
     app.quit();
     return;
   }
@@ -40,7 +43,8 @@ app.whenReady().then(() => {
     ? path.join(process.resourcesPath, "template")
     : path.join(repositoryRoot, "template");
   const legalRoot = app.isPackaged ? process.resourcesPath : repositoryRoot;
-  registerIpc({ ipcMain, dialog, shell, appRoot: repositoryRoot, templateRoot, legalRoot });
+  const runtimeRoot = app.isPackaged ? app.getPath("userData") : repositoryRoot;
+  registerIpc({ ipcMain, dialog, shell, appRoot: runtimeRoot, templateRoot, legalRoot });
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

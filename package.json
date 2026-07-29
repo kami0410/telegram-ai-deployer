@@ -15,7 +15,7 @@
     "privacy:scan": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/privacy-scan.ps1",
     "start": "electron .",
     "package": "electron-builder --dir",
-    "make": "electron-builder --win nsis zip"
+    "make": "electron-builder --win nsis zip --x64"
   },
   "devDependencies": {
     "electron": "43.2.0",
@@ -29,6 +29,7 @@
     "directories": {
       "output": "dist"
     },
+    "publish": null,
     "files": [
       "app/**/*",
       "lib/**/*",
