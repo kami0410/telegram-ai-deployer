@@ -7,6 +7,25 @@ A Windows visual wizard for deploying a private, text-only Telegram AI bot to a 
 
 The first release targets Windows 10/11 x64. DeepSeek V4 Flash is the default model; V4 Pro and an explicit thinking-mode toggle are also available.
 
+## Network requirements
+
+The wizard opens direct HTTPS connections from your computer to:
+
+- `api.telegram.org` — bot token validation and webhook registration
+- `api.deepseek.com` — API key validation
+- Cloudflare service APIs — through the bundled Wrangler CLI
+
+These connections **do not follow the Windows system proxy**. In regions where `api.telegram.org` is not directly reachable (for example, mainland China), the deployment stops at the `secrets` step with a "cannot connect to api.telegram.org" error. To fix this:
+
+- **Recommended:** enable **TUN (global) mode** in your proxy client (Clash Verge, v2rayN, etc.) so traffic from every application is routed through the proxy, then retry the failed step.
+- **Alternative:** close the app and relaunch it from a terminal with environment variables (the bundled Node.js 24 runtime honors them):
+
+  ```powershell
+  $env:NODE_USE_ENV_PROXY = "1"
+  $env:HTTPS_PROXY = "http://127.0.0.1:7897"  # adjust to your proxy port
+  & "C:\path\to\Cloudflare Telegram AI Bot Deployer.exe"
+  ```
+
 ## Security model
 
 - Credentials are entered locally, cleared from the form after submission, and sent to Cloudflare through Wrangler secret input.

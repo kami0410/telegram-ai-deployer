@@ -11,3 +11,4 @@ src/persona/imported-prompt.ts
 deployment-state.json
 .DS_Store
 Thumbs.db
+.workbuddy/

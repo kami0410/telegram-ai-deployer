@@ -7,6 +7,25 @@
 
 首个版本支持 Windows 10/11 x64。默认模型为成本较低的 DeepSeek V4 Flash，也可以选择 V4 Pro，并独立开关思考模式。
 
+## 网络要求
+
+部署过程会从你的电脑直接发起 HTTPS 连接：
+
+- `api.telegram.org` —— 验证 Bot Token、注册 Webhook
+- `api.deepseek.com` —— 验证 API Key
+- Cloudflare 服务 API —— 通过内置的 Wrangler CLI
+
+这些连接**不走 Windows 系统代理**。在无法直连 `api.telegram.org` 的地区（例如中国大陆），部署会在 `secrets` 步骤报"无法连接 api.telegram.org"。解决方法：
+
+- **推荐**：在代理客户端（Clash Verge、v2rayN 等）中开启 **TUN（全局）模式**，让所有应用的流量都经过代理，然后重试失败的步骤。
+- **备选**：关闭应用后，在终端中带环境变量启动（应用内置的 Node.js 24 运行时支持该方式）：
+
+  ```powershell
+  $env:NODE_USE_ENV_PROXY = "1"
+  $env:HTTPS_PROXY = "http://127.0.0.1:7897"  # 端口按你的代理实际配置修改
+  & "C:\你的路径\Cloudflare Telegram AI Bot Deployer.exe"
+  ```
+
 ## 安全设计
 
 - 密钥仅在本地输入，提交后立即清空表单，通过 Wrangler Secret 标准输入写入 Cloudflare。
