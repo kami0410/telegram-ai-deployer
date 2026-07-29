@@ -54,8 +54,9 @@
         <div class="grid">
           <label>Telegram Bot Token<input id="telegramToken" type="password" required autocomplete="off" spellcheck="false"></label>
           <label>DeepSeek API Key<input id="deepseekKey" type="password" required autocomplete="off" spellcheck="false"></label>
-          <label>迁移密钥（8–32 位）<input id="pairingCode" type="password" required minlength="8" maxlength="32" autocomplete="off" spellcheck="false"></label>
+          <label>配对/迁移密钥（8–32 位）<input id="pairingCode" type="password" required minlength="8" maxlength="32" autocomplete="off" spellcheck="false"></label>
         </div>
+        <p class="hint"><strong>首次使用：</strong>部署后向机器人发送 <code>/pair &lt;你填写的配对/迁移密钥&gt;</code>；完成配对后，普通消息才会得到回复。</p>
         <p id="configError" class="error" role="alert"></p>
         <div class="actions"><button class="back secondary" type="button">上一步</button><button class="next" type="button">下一步</button></div>
       </section>

@@ -18,6 +18,12 @@ test("all three secrets are password controls and disclaimer gates deployment", 
   const state = createInitialWizardState();
   assert.equal(state.acceptedDisclaimer, false);
   assert.equal(state.canDeploy, false);
+  assert.match(html, /\/pair &lt;你填写的配对\/迁移密钥&gt;/u);
+});
+
+test("successful deployment explains the required first-time pairing command", async () => {
+  const script = await readFile("app/renderer/app.mjs", "utf8");
+  assert.match(script, /首次使用请发送 \/pair <配对\/迁移密钥>/u);
 });
 
 test("consuming a form clears secret controls synchronously", () => {

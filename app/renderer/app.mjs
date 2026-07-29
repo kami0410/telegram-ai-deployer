@@ -110,6 +110,7 @@ async function submit(resume = false) {
   try {
     const response = resume ? await api.resume(payload) : await api.start(payload);
     document.querySelector("#deploymentStatus").textContent = `部署完成：${response.result.workerUrl ?? "Cloudflare Worker 已创建"}`;
+    document.querySelector("#deploymentStatus").textContent += "；首次使用请发送 /pair <配对/迁移密钥>";
     document.querySelector("#openOutput").disabled = false;
     document.querySelector("#resume").disabled = true;
     resumeMode = false;
