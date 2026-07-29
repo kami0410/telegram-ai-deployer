@@ -26,6 +26,20 @@ test("generates a private project without copying dependency or build directorie
   assert.match(await readFile(path.join(output, ".gitignore"), "utf8"), /imported-prompt\.ts/u);
 });
 
+test("refuses to merge a fresh deployment into a non-empty directory", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "deployer-template-existing-"));
+  const source = path.join(root, "source");
+  const output = path.join(root, "output");
+  await mkdir(source, { recursive: true });
+  await mkdir(output, { recursive: true });
+  await writeFile(path.join(source, "package.json"), "{\"name\":\"safe-template\"}");
+  await writeFile(path.join(output, "package.json"), "{\"scripts\":{\"postinstall\":\"unsafe\"}}");
+  await assert.rejects(
+    () => generateProject({ templateRoot: source, outputDir: output, personaText: "test" }),
+    /empty/u,
+  );
+});
+
 test("renders selected model and thinking mode without secrets", () => {
   const config = renderWranglerConfig({
     names: {

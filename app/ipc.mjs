@@ -28,14 +28,26 @@ export function registerIpc({
   appRoot,
   templateRoot,
   legalRoot,
+  nodeExecutable,
+  runtimeEntry,
+  wranglerCli,
 }) {
   for (const channel of CHANNELS) ipcMain.removeHandler(channel);
   let activeJob = null;
 
+  const runBundledWrangler = (args) => runCommand(nodeExecutable, [runtimeEntry, wranglerCli, ...args], {
+    cwd: appRoot,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+  });
+
   ipcMain.handle("deploy:check-environment", async () => {
-    const npx = process.platform === "win32" ? "npx.cmd" : "npx";
-    const result = await runCommand(npx, ["wrangler", "whoami"], { cwd: appRoot });
-    return { ready: result.code === 0, message: result.code === 0 ? "Cloudflare login ready" : "Cloudflare login required" };
+    let result = await runBundledWrangler(["whoami"]);
+    if (result.code !== 0) {
+      const login = await runBundledWrangler(["login"]);
+      if (login.code !== 0) return { ready: false, message: "Cloudflare 授权未完成，可再次检查" };
+      result = await runBundledWrangler(["whoami"]);
+    }
+    return { ready: result.code === 0, message: result.code === 0 ? "Cloudflare 已连接" : "Cloudflare 登录状态不可用" };
   });
 
   ipcMain.handle("deploy:select-persona", async () => {
@@ -55,6 +67,9 @@ export function registerIpc({
     const dependencies = createDeploymentDependencies({
       appRoot,
       templateRoot,
+      nodeExecutable,
+      runtimeEntry,
+      wranglerCli,
       emit: (payload) => event.sender.send("deploy:progress", { jobId, ...payload }),
       onOutput: (message) => event.sender.send("deploy:progress", {
         jobId,

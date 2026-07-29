@@ -27,9 +27,9 @@
 
     <form id="wizard" novalidate>
       <section data-step="1">
-        <div class="section-heading"><span>01</span><div><h2>检查本机环境</h2><p>需要 Node.js、Wrangler 和已登录的 Cloudflare 账户。</p></div></div>
+        <div class="section-heading"><span>01</span><div><h2>连接 Cloudflare</h2><p>Wrangler 已内置；若尚未登录，检查时会打开 Cloudflare 官方授权页。</p></div></div>
         <div id="environmentStatus" class="status-card" aria-live="polite">尚未检查</div>
-        <button id="checkEnvironment" type="button">开始检查</button>
+        <button id="checkEnvironment" type="button">检查并连接</button>
         <div class="actions"><span></span><button class="next" type="button">下一步</button></div>
       </section>
 
@@ -49,13 +49,14 @@
         <label class="toggle"><input id="thinking" type="checkbox"><span>启用思考模式</span></label>
         <div class="grid two">
           <label>项目名称<input id="projectName" required value="my-telegram-bot" autocomplete="off" pattern="[a-z][a-z0-9-]{1,39}"></label>
-          <label>生成目录<input id="outputDir" required placeholder="C:\Bots" autocomplete="off"></label>
+          <label>新建/空的项目目录<input id="outputDir" required placeholder="C:\Bots\my-telegram-bot" autocomplete="off"></label>
         </div>
         <div class="grid">
           <label>Telegram Bot Token<input id="telegramToken" type="password" required autocomplete="off" spellcheck="false"></label>
           <label>DeepSeek API Key<input id="deepseekKey" type="password" required autocomplete="off" spellcheck="false"></label>
           <label>迁移密钥（8–32 位）<input id="pairingCode" type="password" required minlength="8" maxlength="32" autocomplete="off" spellcheck="false"></label>
         </div>
+        <p id="configError" class="error" role="alert"></p>
         <div class="actions"><button class="back secondary" type="button">上一步</button><button class="next" type="button">下一步</button></div>
       </section>
 

@@ -34,10 +34,11 @@ try {
   $uninstaller = $uninstallers[0].FullName
 
   $smokeMarker = Join-Path $testRoot "smoke.txt"
-  $smoke = Start-Process -FilePath $application -ArgumentList @("--smoke-test", "--smoke-test-output=$smokeMarker") -Wait -PassThru
+  $smoke = Start-Process -FilePath $application -ArgumentList @("--runtime-smoke-test", "--smoke-test-output=$smokeMarker") -Wait -PassThru
   if ($smoke.ExitCode -ne 0) { throw "Packaged application smoke test exited with code $($smoke.ExitCode)." }
-  if (-not (Test-Path -LiteralPath $smokeMarker) -or (Get-Content -LiteralPath $smokeMarker -Raw) -notmatch "main-window-ready") {
-    throw "Packaged application did not report main-window-ready."
+  $smokeText = if (Test-Path -LiteralPath $smokeMarker) { Get-Content -LiteralPath $smokeMarker -Raw } else { "" }
+  if ($smokeText -notmatch "main-window-ready" -or $smokeText -notmatch "deployment-runtime-ready") {
+    throw "Packaged application did not report main-window-ready and deployment-runtime-ready."
   }
 
   $hash = Get-FileHash -LiteralPath $installer -Algorithm SHA256

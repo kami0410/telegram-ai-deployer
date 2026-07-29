@@ -10,6 +10,7 @@ The first release targets Windows 10/11 x64. DeepSeek V4 Flash is the default mo
 ## Security model
 
 - Credentials are entered locally, cleared from the form after submission, and sent to Cloudflare through Wrangler secret input.
+- Wrangler is bundled and version-pinned; the application never runs `npm`, `npx`, or a command resolved through `PATH`.
 - Credentials, imported persona text, deployment state, generated projects, and logs are excluded from Git.
 - The application loads local assets only and contains no telemetry.
 - Review [SECURITY.md](SECURITY.md) before reporting a vulnerability. Never post credentials or private prompts in a public issue.
@@ -19,5 +20,7 @@ The first release targets Windows 10/11 x64. DeepSeek V4 Flash is the default mo
 The Windows application is under active development. Do not use pre-release builds for important or irreplaceable data.
 
 Chinese documentation: [README_ZH.md](README_ZH.md)
+
+Technical documentation: [Architecture](docs/architecture.md) · [Release checklist](docs/release-checklist.md)
 
 License: [MIT](LICENSE)

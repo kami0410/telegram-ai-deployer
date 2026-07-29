@@ -1,4 +1,4 @@
-import { clearPayloadSecrets, consumeDeploymentForm } from "./form-state.mjs";
+import { clearPayloadSecrets, consumeDeploymentForm, validateWizardValues } from "./form-state.mjs";
 
 const api = window.deployer;
 const form = document.querySelector("#wizard");
@@ -52,7 +52,17 @@ function renderSummary() {
 }
 
 for (const button of document.querySelectorAll(".next")) button.addEventListener("click", () => {
-  if (currentStep === 3) renderSummary();
+  if (currentStep === 3) {
+    const error = validateWizardValues({
+      ...values(),
+      telegramToken: secrets.telegramToken.value,
+      deepseekKey: secrets.deepseekKey.value,
+      pairingCode: secrets.pairingCode.value,
+    });
+    document.querySelector("#configError").textContent = error;
+    if (error) return;
+    renderSummary();
+  }
   showStep(currentStep + 1);
 });
 for (const button of document.querySelectorAll(".back")) button.addEventListener("click", () => showStep(currentStep - 1));
@@ -61,7 +71,7 @@ document.querySelector("#checkEnvironment").addEventListener("click", async () =
   const status = document.querySelector("#environmentStatus");
   status.textContent = "正在检查…";
   try { const result = await api.checkEnvironment(); status.textContent = result.message; status.dataset.ready = String(result.ready); }
-  catch { status.textContent = "环境检查失败，请确认 Node.js、Wrangler 和 Cloudflare 登录状态"; }
+  catch { status.textContent = "连接失败，请检查网络后重试 Cloudflare 授权"; }
 });
 
 document.querySelector("#selectPersona").addEventListener("click", async () => {

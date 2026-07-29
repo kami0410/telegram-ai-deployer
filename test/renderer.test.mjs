@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { consumeDeploymentForm, createInitialWizardState } from "../app/renderer/form-state.mjs";
+import { consumeDeploymentForm, createInitialWizardState, validateWizardValues } from "../app/renderer/form-state.mjs";
 
 test("wizard exposes five local-only steps and the approved model choices", async () => {
   const html = await readFile("app/renderer/index.html", "utf8");
@@ -37,4 +37,14 @@ test("consuming a form clears secret controls synchronously", () => {
   assert.equal(payload.deepseekKey, "deepseek-secret");
   assert.equal(payload.pairingCode, "pairing-secret");
   assert.deepEqual(Object.values(controls).map((control) => control.value), ["", "", ""]);
+});
+
+test("configuration validation requires an empty-project path and all secrets", () => {
+  const valid = {
+    projectName: "demo-bot", outputDir: "C:\\Bots\\demo-bot", model: "deepseek-v4-flash",
+    telegramToken: "1".repeat(20), deepseekKey: "k".repeat(10), pairingCode: "pair-code",
+  };
+  assert.equal(validateWizardValues(valid), "");
+  assert.match(validateWizardValues({ ...valid, outputDir: "Bots" }), /absolute/u);
+  assert.match(validateWizardValues({ ...valid, telegramToken: "" }), /required/u);
 });

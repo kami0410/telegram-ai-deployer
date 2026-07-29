@@ -3,10 +3,12 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerIpc } from "./ipc.mjs";
+import { runCommand } from "../lib/runner.mjs";
 
 const appDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(appDirectory, "..");
 const smokeTest = process.argv.includes("--smoke-test");
+const runtimeSmokeTest = process.argv.includes("--runtime-smoke-test");
 const smokeOutput = process.argv.find((argument) => argument.startsWith("--smoke-test-output="))?.slice("--smoke-test-output=".length);
 
 function createWindow() {
@@ -32,10 +34,27 @@ function createWindow() {
   return window;
 }
 
-app.whenReady().then(() => {
-  if (smokeTest) {
-    process.stdout?.write("main-window-ready\n");
-    if (smokeOutput && path.isAbsolute(smokeOutput)) writeFileSync(smokeOutput, "main-window-ready\n", "utf8");
+app.whenReady().then(async () => {
+  const wranglerCli = app.isPackaged
+    ? path.join(repositoryRoot, "node_modules", "wrangler", "wrangler-dist", "cli.js")
+    : path.join(repositoryRoot, "node_modules", "wrangler", "wrangler-dist", "cli.js");
+  const runtimeEntry = path.join(appDirectory, "wrangler-runtime.cjs");
+  if (smokeTest || runtimeSmokeTest) {
+    let marker = "main-window-ready\n";
+    if (runtimeSmokeTest) {
+      const result = await runCommand(process.execPath, [runtimeEntry, wranglerCli, "--version"], {
+        cwd: app.isPackaged ? process.resourcesPath : repositoryRoot,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      });
+      if (result.code !== 0 || !result.stdout.includes("4.114.0")) {
+        if (smokeOutput && path.isAbsolute(smokeOutput)) writeFileSync(smokeOutput, "deployment-runtime-failed\n", "utf8");
+        app.exit(1);
+        return;
+      }
+      marker += "deployment-runtime-ready\n";
+    }
+    process.stdout?.write(marker);
+    if (smokeOutput && path.isAbsolute(smokeOutput)) writeFileSync(smokeOutput, marker, "utf8");
     app.quit();
     return;
   }
@@ -44,7 +63,10 @@ app.whenReady().then(() => {
     : path.join(repositoryRoot, "template");
   const legalRoot = app.isPackaged ? process.resourcesPath : repositoryRoot;
   const runtimeRoot = app.isPackaged ? app.getPath("userData") : repositoryRoot;
-  registerIpc({ ipcMain, dialog, shell, appRoot: runtimeRoot, templateRoot, legalRoot });
+  registerIpc({
+    ipcMain, dialog, shell, appRoot: runtimeRoot, templateRoot, legalRoot,
+    nodeExecutable: process.execPath, runtimeEntry, wranglerCli,
+  });
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -9,6 +9,8 @@ test("Windows package has x64 installer, archive, and selectable destination", a
   assert.equal(packageJson.build.nsis.oneClick, false);
   assert.equal(packageJson.build.nsis.allowToChangeInstallationDirectory, true);
   assert.equal(packageJson.build.nsis.perMachine, false);
+  assert.equal(packageJson.build.asar, true);
+  assert.equal(packageJson.dependencies.wrangler, "4.114.0");
 });
 
 test("filesystem resources are unpacked and private artifacts are excluded", async () => {
@@ -22,7 +24,7 @@ test("filesystem resources are unpacked and private artifacts are excluded", asy
 
 test("installer verifier checks custom path, launch, resources, uninstall, and hash", async () => {
   const script = await readFile("scripts/verify-installer.ps1", "utf8");
-  for (const marker of ["main-window-ready", "DISCLAIMER_ZH.md", "template", "Get-FileHash", "Uninstall", "CODEX_INSTALL_ROOT"]) {
+  for (const marker of ["main-window-ready", "deployment-runtime-ready", "DISCLAIMER_ZH.md", "template", "Get-FileHash", "Uninstall", "CODEX_INSTALL_ROOT"]) {
     assert.match(script, new RegExp(marker, "u"));
   }
 });
