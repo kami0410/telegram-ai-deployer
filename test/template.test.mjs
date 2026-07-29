@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { generateProject, renderWranglerConfig } from "../lib/template.mjs";
+import * as templateModule from "../lib/template.mjs";
+
+const { generateProject, renderWranglerConfig } = templateModule;
+
+test("does not try to recreate an existing Windows drive root", () => {
+  assert.equal(typeof templateModule.parentDirectoryToCreate, "function");
+  assert.equal(templateModule.parentDirectoryToCreate("D:\\My_bot", path.win32), null);
+});
 
 test("generates a private project without copying dependency or build directories", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "deployer-template-"));

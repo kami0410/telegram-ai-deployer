@@ -67,7 +67,7 @@ test("records a recoverable failure without marking the step complete", async ()
   assert.deepEqual(fixture.events.at(-1), {
     step: "vectorize",
     status: "failed",
-    message: "Deployment step failed",
+    message: "Deployment step failed: failed-vectorize",
     recoverable: true,
   });
 });
