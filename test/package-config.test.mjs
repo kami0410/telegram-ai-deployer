@@ -27,4 +27,12 @@ test("installer verifier checks custom path, launch, resources, uninstall, and h
   for (const marker of ["main-window-ready", "deployment-runtime-ready", "DISCLAIMER_ZH.md", "template", "Get-FileHash", "Uninstall", "CODEX_INSTALL_ROOT"]) {
     assert.match(script, new RegExp(marker, "u"));
   }
+  assert.match(script, /\*\.zip/u);
+});
+
+test("packaged runtime resolves native esbuild only from Electron's unpacked resources", async () => {
+  const source = await readFile("app/main.mjs", "utf8");
+  assert.match(source, /ESBUILD_BINARY_PATH/u);
+  assert.match(source, /app\.asar\.unpacked/u);
+  assert.doesNotMatch(source, /process\.env\.PATH\s*=/u);
 });

@@ -31,13 +31,14 @@ export function registerIpc({
   nodeExecutable,
   runtimeEntry,
   wranglerCli,
+  runtimeEnvironment,
 }) {
   for (const channel of CHANNELS) ipcMain.removeHandler(channel);
   let activeJob = null;
 
   const runBundledWrangler = (args) => runCommand(nodeExecutable, [runtimeEntry, wranglerCli, ...args], {
     cwd: appRoot,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    env: runtimeEnvironment,
   });
 
   ipcMain.handle("deploy:check-environment", async () => {
@@ -70,6 +71,7 @@ export function registerIpc({
       nodeExecutable,
       runtimeEntry,
       wranglerCli,
+      runtimeEnvironment,
       emit: (payload) => event.sender.send("deploy:progress", { jobId, ...payload }),
       onOutput: (message) => event.sender.send("deploy:progress", {
         jobId,

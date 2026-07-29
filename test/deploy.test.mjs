@@ -72,6 +72,12 @@ test("records a recoverable failure without marking the step complete", async ()
   });
 });
 
+test("does not create resume state inside the output directory before template generation", async () => {
+  const fixture = fakeDependencies();
+  await runDeployment(exampleInput, fixture.dependencies);
+  assert.deepEqual(JSON.parse(fixture.states[0]).completedSteps, ["environment", "template"]);
+});
+
 test("resume skips completed steps but requires freshly supplied secrets", async () => {
   const existingState = {
     version: 1,

@@ -39,12 +39,18 @@ app.whenReady().then(async () => {
     ? path.join(repositoryRoot, "node_modules", "wrangler", "wrangler-dist", "cli.js")
     : path.join(repositoryRoot, "node_modules", "wrangler", "wrangler-dist", "cli.js");
   const runtimeEntry = path.join(appDirectory, "wrangler-runtime.cjs");
+  const runtimeEnvironment = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
+  if (app.isPackaged) {
+    runtimeEnvironment.ESBUILD_BINARY_PATH = path.join(
+      process.resourcesPath, "app.asar.unpacked", "node_modules", "@esbuild", "win32-x64", "esbuild.exe",
+    );
+  }
   if (smokeTest || runtimeSmokeTest) {
     let marker = "main-window-ready\n";
     if (runtimeSmokeTest) {
       const result = await runCommand(process.execPath, [runtimeEntry, wranglerCli, "--version"], {
         cwd: app.isPackaged ? process.resourcesPath : repositoryRoot,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        env: runtimeEnvironment,
       });
       if (result.code !== 0 || !result.stdout.includes("4.114.0")) {
         if (smokeOutput && path.isAbsolute(smokeOutput)) writeFileSync(smokeOutput, "deployment-runtime-failed\n", "utf8");
@@ -65,7 +71,7 @@ app.whenReady().then(async () => {
   const runtimeRoot = app.isPackaged ? app.getPath("userData") : repositoryRoot;
   registerIpc({
     ipcMain, dialog, shell, appRoot: runtimeRoot, templateRoot, legalRoot,
-    nodeExecutable: process.execPath, runtimeEntry, wranglerCli,
+    nodeExecutable: process.execPath, runtimeEntry, wranglerCli, runtimeEnvironment,
   });
   createWindow();
   app.on("activate", () => {

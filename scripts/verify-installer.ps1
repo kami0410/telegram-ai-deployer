@@ -4,9 +4,11 @@ Set-StrictMode -Version Latest
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $distRoot = Join-Path $repositoryRoot "dist"
 $installers = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "*.exe" | Where-Object { $_.Name -ne "Uninstall.exe" })
+$archives = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "*.zip")
 if ($installers.Count -ne 1) {
   throw "Expected exactly one installer in dist, found $($installers.Count)."
 }
+if ($archives.Count -ne 1) { throw "Expected exactly one ZIP archive in dist, found $($archives.Count)." }
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 $testRoot = Join-Path $tempBase ("cloudflare-bot-deployer-verify-" + [Guid]::NewGuid().ToString("N"))
@@ -41,8 +43,11 @@ try {
     throw "Packaged application did not report main-window-ready and deployment-runtime-ready."
   }
 
-  $hash = Get-FileHash -LiteralPath $installer -Algorithm SHA256
-  "$($hash.Hash)  $($installers[0].Name)" | Set-Content -LiteralPath (Join-Path $distRoot "SHA256SUMS.txt") -Encoding ascii
+  $hashLines = @($installers[0], $archives[0]) | ForEach-Object {
+    $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
+    "$($hash.Hash)  $($_.Name)"
+  }
+  $hashLines | Set-Content -LiteralPath (Join-Path $distRoot "SHA256SUMS.txt") -Encoding ascii
 
   $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru -WindowStyle Hidden
   if ($uninstallProcess.ExitCode -ne 0) { throw "Uninstaller exited with code $($uninstallProcess.ExitCode)." }

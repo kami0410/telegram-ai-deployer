@@ -12,7 +12,11 @@ $excludedPaths = @(
   ':(exclude)scripts/privacy-rules.mjs',
   ':(exclude)test/privacy-gate.test.mjs',
   ':(exclude)test/template-privacy.test.mjs',
-  ':(exclude)test/cloudflare.test.mjs'
+  ':(exclude)test/cloudflare.test.mjs',
+  ':(exclude)package-lock.json',
+  ':(exclude)template/package-lock.json',
+  ':(exclude)template/test/**',
+  ':(exclude)template/vitest.config.ts'
 )
 
 function Assert-GitScopeClean {
@@ -22,10 +26,37 @@ function Assert-GitScopeClean {
   if ($LASTEXITCODE -ne 1) { throw "Git privacy scan failed to execute." }
 }
 
+function Assert-GitStructuredClean {
+  param([string]$Commit)
+  $uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}'
+  $uuidLines = @(& git grep -I -h -E $uuid $Commit -- . @excludedPaths)
+  foreach ($line in $uuidLines) {
+    foreach ($match in [regex]::Matches($line, $uuid)) {
+      if ($match.Value -ne '00000000-0000-0000-0000-000000000000') { throw "Git history contains a non-placeholder UUID." }
+    }
+  }
+  $email = '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}'
+  $emailLines = @(& git grep -I -h -E $email $Commit -- . @excludedPaths)
+  foreach ($line in $emailLines) {
+    foreach ($match in [regex]::Matches($line, $email)) {
+      $domain = $match.Value.Split('@')[-1].ToLowerInvariant()
+      if ($domain -notin @('example.invalid', 'example.com')) { throw "Git history contains a non-example email." }
+    }
+  }
+  $secretAssignment = '(TOKEN|API_KEY|SECRET)[[:space:]]*[:=][[:space:]]*["''][A-Za-z0-9_-]{16,}'
+  & git grep -I -q -E $secretAssignment $Commit -- . @excludedPaths
+  if ($LASTEXITCODE -eq 0) { throw "Git history contains a literal secret assignment." }
+  if ($LASTEXITCODE -ne 1) { throw "Structured Git history scan failed." }
+  $paths = @(& git ls-tree -r --name-only $Commit)
+  if ($paths | Where-Object { $_ -match '(?i)chat[_ -]?export|\.(bmp|gif|ico|jpe?g|png|webp)$' }) {
+    throw "Git history contains an unreviewed chat export or image asset."
+  }
+}
+
 function Assert-DirectoryClean {
   param([string]$Path)
   if (-not (Test-Path -LiteralPath $Path)) { return }
-  & rg --files-with-matches --hidden --no-messages -I -i -e $forbidden --glob '!node_modules/**' --glob '!dist/**' --glob '!.git/**' --glob '!scripts/privacy-scan.ps1' --glob '!scripts/privacy-rules.mjs' --glob '!test/privacy-gate.test.mjs' --glob '!test/template-privacy.test.mjs' --glob '!test/cloudflare.test.mjs' $Path | Out-Null
+  & rg --files-with-matches --hidden --no-messages -I -i -e $forbidden --glob '!**/node_modules/**' --glob '!**/dist/**' --glob '!**/.git/**' --glob '!scripts/privacy-scan.ps1' --glob '!scripts/privacy-rules.mjs' --glob '!test/privacy-gate.test.mjs' --glob '!test/template-privacy.test.mjs' --glob '!test/cloudflare.test.mjs' $Path | Out-Null
   if ($LASTEXITCODE -eq 0) { throw "Privacy scan detected forbidden content in a filesystem scope." }
   if ($LASTEXITCODE -ne 1) { throw "Filesystem privacy scan failed to execute." }
 }
@@ -37,7 +68,10 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Structured privacy rules failed for the worktree." }
   $commits = @(& git rev-list --all)
   if ($LASTEXITCODE -ne 0) { throw "git rev-list failed." }
-  foreach ($commit in $commits) { Assert-GitScopeClean -Commit $commit }
+  foreach ($commit in $commits) {
+    Assert-GitScopeClean -Commit $commit
+    Assert-GitStructuredClean -Commit $commit
+  }
 
   New-Item -ItemType Directory -Path $scanRoot -Force | Out-Null
   & node (Join-Path $PSScriptRoot "generate-privacy-fixture.mjs") $generatedRoot

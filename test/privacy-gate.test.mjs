@@ -5,7 +5,7 @@ import { detectSensitive } from "../scripts/privacy-rules.mjs";
 
 test("privacy gate covers worktree, history, generated output, and package payload", async () => {
   const script = await readFile("scripts/privacy-scan.ps1", "utf8");
-  for (const marker of ["Assert-GitScopeClean", "git rev-list", "generate-privacy-fixture.mjs", "app.asar", "dist", "Remove-Item"]) {
+  for (const marker of ["Assert-GitScopeClean", "Assert-GitStructuredClean", "git rev-list", "generate-privacy-fixture.mjs", "app.asar", "dist", "Remove-Item"]) {
     assert.match(script, new RegExp(marker, "u"));
   }
   assert.match(script, /tvly-/u);
