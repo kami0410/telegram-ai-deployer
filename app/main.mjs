@@ -20,7 +20,7 @@ function createWindow() {
     show: false,
     title: "Cloudflare Telegram AI Bot Deployer",
     webPreferences: {
-      preload: path.join(appDirectory, "preload.mjs"),
+      preload: path.join(appDirectory, "preload.cjs"),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
