@@ -1,0 +1,20 @@
+{
+  "name": "cloudflare-telegram-ai-bot-deployer",
+  "version": "0.1.0",
+  "description": "Privacy-focused Windows deployment wizard for a Cloudflare Telegram AI bot.",
+  "type": "module",
+  "private": false,
+  "license": "MIT",
+  "author": "Open Source Maintainers",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "app/main.mjs",
+  "scripts": {
+    "test": "node --test",
+    "privacy:scan": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/privacy-scan.ps1",
+    "start": "electron .",
+    "package": "electron-forge package",
+    "make": "electron-forge make"
+  }
+}
