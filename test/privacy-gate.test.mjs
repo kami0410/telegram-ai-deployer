@@ -25,6 +25,8 @@ test("privacy rules detect each prohibited class without returning matched value
   ];
   for (const [rule, fixture] of fixtures) assert.ok(detectSensitive(fixture).includes(rule), rule);
   assert.ok(detectSensitive("{}", "chat_export.json").includes("chat-export"));
+  assert.equal(detectSensitive('API_KEY="test-only-deepseek-key"').includes("secret-assignment"), false);
+  assert.ok(detectSensitive('API_KEY="realcredentialvalue123"').includes("secret-assignment"));
   assert.deepEqual(detectSensitive("noreply@example.invalid 00000000-0000-0000-0000-000000000000"), []);
 });
 

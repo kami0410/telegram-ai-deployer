@@ -78,6 +78,15 @@ test("does not create resume state inside the output directory before template g
   assert.deepEqual(JSON.parse(fixture.states[0]).completedSteps, ["environment", "template"]);
 });
 
+test("failures before template persistence are not advertised as resumable", async () => {
+  for (const failAt of ["environment", "template"]) {
+    const fixture = fakeDependencies({ failAt });
+    await assert.rejects(() => runDeployment(exampleInput, fixture.dependencies));
+    assert.equal(fixture.states.length, 0);
+    assert.equal(fixture.events.at(-1).recoverable, false);
+  }
+});
+
 test("resume skips completed steps but requires freshly supplied secrets", async () => {
   const existingState = {
     version: 1,

@@ -14,6 +14,7 @@ let personaPath = "";
 let outputDir = "";
 let running = false;
 let resumeMode = false;
+let canResume = false;
 
 function showStep(step) {
   currentStep = Math.max(1, Math.min(5, step));
@@ -90,12 +91,18 @@ api.onProgress((event) => {
   document.querySelector("#progress").append(item);
   document.querySelector("#deploymentStatus").textContent = event.status === "failed" ? "部署中断，可重新输入密钥后恢复" : "部署进行中";
   if (event.step === "log") document.querySelector("#log").textContent += `${event.message}\n`;
-  if (event.recoverable) document.querySelector("#resume").disabled = false;
+  if (event.status === "failed") {
+    canResume = event.recoverable === true;
+    const action = document.querySelector("#resume");
+    action.disabled = false;
+    action.textContent = canResume ? "恢复部署" : "返回修改";
+  }
 });
 
 async function submit(resume = false) {
   if (running) return;
   const payload = consumeDeploymentForm(secrets, values());
+  if (!resume) canResume = false;
   outputDir = payload.outputDir;
   running = true;
   showStep(5);
@@ -107,8 +114,12 @@ async function submit(resume = false) {
     document.querySelector("#resume").disabled = true;
     resumeMode = false;
   } catch {
-    document.querySelector("#deploymentStatus").textContent = "部署未完成。日志已脱敏，可重新填写密钥后恢复。";
-    document.querySelector("#resume").disabled = false;
+    document.querySelector("#deploymentStatus").textContent = canResume
+      ? "部署未完成。日志已脱敏，可重新填写密钥后恢复。"
+      : "部署尚未建立恢复点，请返回修改后重新开始。";
+    const action = document.querySelector("#resume");
+    action.disabled = false;
+    action.textContent = canResume ? "恢复部署" : "返回修改";
   } finally {
     clearPayloadSecrets(payload);
     running = false;
@@ -116,7 +127,7 @@ async function submit(resume = false) {
 }
 
 form.addEventListener("submit", (event) => { event.preventDefault(); void submit(resumeMode); });
-document.querySelector("#resume").addEventListener("click", () => { resumeMode = true; showStep(3); });
+document.querySelector("#resume").addEventListener("click", () => { resumeMode = canResume; showStep(3); });
 document.querySelector("#openOutput").addEventListener("click", () => { if (outputDir) void api.openOutputFolder(outputDir); });
 
 const notice = document.querySelector("#notice");

@@ -8,21 +8,22 @@ const genericRules = [
   ["provider-key", /\b(?:sk-|tvly-)[A-Za-z0-9_-]{16,}\b/u],
   ["production-worker-url", /https?:\/\/[a-z0-9.-]+\.workers\.dev\b/iu],
   ["windows-user-path", /[A-Z]:\\Users\\[^\\\s]+/iu],
-  ["secret-assignment", /(?:TOKEN|API_KEY|SECRET)\s*[:=]\s*["'][A-Za-z0-9_-]{16,}["']/u],
 ];
 const uuidPattern = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/igu;
 const emailPattern = /\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b/igu;
+const secretAssignmentPattern = /(?:TOKEN|API_KEY|SECRET)\s*[:=]\s*["']([A-Za-z0-9_-]{16,})["']/gu;
 
 export function detectSensitive(text, filename = "") {
   const value = String(text);
   const findings = genericRules.filter(([, pattern]) => pattern.test(value)).map(([rule]) => rule);
   if ([...value.matchAll(uuidPattern)].some((match) => match[0] !== "00000000-0000-0000-0000-000000000000")) findings.push("non-placeholder-uuid");
   if ([...value.matchAll(emailPattern)].some((match) => !["example.invalid", "example.com"].includes(match[1].toLowerCase()))) findings.push("non-example-email");
+  if ([...value.matchAll(secretAssignmentPattern)].some((match) => !/^(?:test-only-|example-|public-)/u.test(match[1]))) findings.push("secret-assignment");
   if (/chat[_ -]?export/iu.test(filename)) findings.push("chat-export");
   return [...new Set(findings)];
 }
 
-const skippedDirectories = new Set([".git", "node_modules", "dist", "out", ".wrangler", "test"]);
+const skippedDirectories = new Set([".git", "node_modules", "dist", "out", ".wrangler"]);
 const skippedFiles = new Set(["package-lock.json", "privacy-rules.mjs", "privacy-scan.ps1", "privacy-gate.test.mjs", "template-privacy.test.mjs", "cloudflare.test.mjs", "vitest.config.ts"]);
 const textExtensions = new Set([".cjs", ".css", ".html", ".js", ".json", ".jsonc", ".md", ".mjs", ".ps1", ".sql", ".ts", ".txt", ".yml", ".yaml"]);
 const imageExtensions = new Set([".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".webp"]);

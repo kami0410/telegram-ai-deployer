@@ -15,7 +15,6 @@ $excludedPaths = @(
   ':(exclude)test/cloudflare.test.mjs',
   ':(exclude)package-lock.json',
   ':(exclude)template/package-lock.json',
-  ':(exclude)template/test/**',
   ':(exclude)template/vitest.config.ts'
 )
 
@@ -44,9 +43,13 @@ function Assert-GitStructuredClean {
     }
   }
   $secretAssignment = '(TOKEN|API_KEY|SECRET)[[:space:]]*[:=][[:space:]]*["''][A-Za-z0-9_-]{16,}'
-  & git grep -I -q -E $secretAssignment $Commit -- . @excludedPaths
-  if ($LASTEXITCODE -eq 0) { throw "Git history contains a literal secret assignment." }
-  if ($LASTEXITCODE -ne 1) { throw "Structured Git history scan failed." }
+  $secretLines = @(& git grep -I -h -E $secretAssignment $Commit -- . @excludedPaths)
+  $secretDotNet = '(TOKEN|API_KEY|SECRET)\s*[:=]\s*["'']([A-Za-z0-9_-]{16,})'
+  foreach ($line in $secretLines) {
+    foreach ($match in [regex]::Matches($line, $secretDotNet)) {
+      if ($match.Groups[2].Value -notmatch '^(test-only-|example-|public-)') { throw "Git history contains a literal secret assignment." }
+    }
+  }
   $paths = @(& git ls-tree -r --name-only $Commit)
   if ($paths | Where-Object { $_ -match '(?i)chat[_ -]?export|\.(bmp|gif|ico|jpe?g|png|webp)$' }) {
     throw "Git history contains an unreviewed chat export or image asset."
