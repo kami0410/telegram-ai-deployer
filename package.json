@@ -11,7 +11,7 @@
   },
   "main": "app/main.mjs",
   "scripts": {
-    "test": "node --test",
+    "test": "node --test test/*.test.mjs",
     "privacy:scan": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/privacy-scan.ps1",
     "start": "electron .",
     "package": "electron-forge package",

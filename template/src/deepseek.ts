@@ -1,0 +1,766 @@
+import type { ChatCompletionMessage } from "./prompt";
+import {
+  canonicalPersonaJson,
+  type PersonaSnapshot,
+} from "./persona/seed";
+
+const CHAT_COMPLETIONS_URL = "https://api.deepseek.com/chat/completions";
+const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1_024 * 1_024;
+
+export interface DeepSeekOptions {
+  apiKey: string;
+  model: string;
+  maxOutputTokens: number;
+  thinking?: "enabled" | "disabled";
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  fetcher?: typeof fetch;
+}
+
+export interface DeepSeekUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface DeepSeekChatResult {
+  content: string;
+  usage: DeepSeekUsage;
+}
+
+export type DeepSeekErrorCode =
+  | "rate_limited"
+  | "upstream_4xx"
+  | "upstream_5xx"
+  | "timeout"
+  | "network_error"
+  | "invalid_response"
+  | "response_too_large"
+  | "invalid_memory_json"
+  | "invalid_persona_draft";
+
+export class DeepSeekError extends Error {
+  readonly service = "deepseek";
+
+  constructor(
+    readonly code: DeepSeekErrorCode,
+    readonly status: number | null,
+    readonly retryable: boolean,
+    readonly detail?: string,
+  ) {
+    super(`deepseek_${code}`);
+    this.name = "DeepSeekError";
+  }
+}
+
+interface CompletionEnvelope {
+  choices: Array<{ message: { content: string } }>;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && typeof value === "number" && value >= 0;
+}
+
+function parseCompletionEnvelope(value: unknown): CompletionEnvelope {
+  if (!isRecord(value) || !Array.isArray(value.choices) || value.choices.length === 0) {
+    throw new DeepSeekError("invalid_response", 200, false);
+  }
+  const firstChoice = value.choices[0];
+  if (!isRecord(firstChoice) || !isRecord(firstChoice.message)) {
+    throw new DeepSeekError("invalid_response", 200, false);
+  }
+  const content = firstChoice.message.content;
+  if (typeof content !== "string" || content.length === 0) {
+    throw new DeepSeekError("invalid_response", 200, false);
+  }
+  const usage = value.usage;
+  if (
+    !isRecord(usage) ||
+    !isNonNegativeInteger(usage.prompt_tokens) ||
+    !isNonNegativeInteger(usage.completion_tokens) ||
+    !isNonNegativeInteger(usage.total_tokens)
+  ) {
+    throw new DeepSeekError("invalid_response", 200, false);
+  }
+
+  return {
+    choices: [{ message: { content } }],
+    usage: {
+      prompt_tokens: usage.prompt_tokens,
+      completion_tokens: usage.completion_tokens,
+      total_tokens: usage.total_tokens,
+    },
+  };
+}
+
+async function readBoundedText(
+  response: Response,
+  maxBytes: number,
+): Promise<string> {
+  const declared = response.headers.get("content-length");
+  if (declared !== null && Number(declared) > maxBytes) {
+    throw new DeepSeekError("response_too_large", response.status, false);
+  }
+  if (response.body === null) {
+    throw new DeepSeekError("invalid_response", response.status, false);
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new DeepSeekError("response_too_large", response.status, false);
+    }
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+async function requestCompletion(
+  options: DeepSeekOptions,
+  messages: ChatCompletionMessage[],
+  responseFormat?: { type: "json_object" },
+): Promise<DeepSeekChatResult> {
+  const fetcher = options.fetcher ?? fetch;
+  let response: Response;
+  try {
+    response = await fetcher(CHAT_COMPLETIONS_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${options.apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: options.model,
+        messages,
+        thinking: { type: options.thinking ?? "disabled" },
+        stream: false,
+        max_tokens: options.maxOutputTokens,
+        ...(responseFormat === undefined
+          ? {}
+          : { response_format: responseFormat }),
+      }),
+      signal: AbortSignal.timeout(options.timeoutMs ?? 90_000),
+    });
+  } catch (error) {
+    if (error instanceof DeepSeekError) throw error;
+    if (
+      error instanceof DOMException &&
+      (error.name === "AbortError" || error.name === "TimeoutError")
+    ) {
+      throw new DeepSeekError("timeout", null, true);
+    }
+    throw new DeepSeekError("network_error", null, true);
+  }
+
+  if (!response.ok) {
+    if (response.status === 429) {
+      throw new DeepSeekError("rate_limited", 429, true);
+    }
+    if (response.status >= 500) {
+      throw new DeepSeekError("upstream_5xx", response.status, true);
+    }
+    throw new DeepSeekError("upstream_4xx", response.status, false);
+  }
+
+  const text = await readBoundedText(
+    response,
+    options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new DeepSeekError("invalid_response", response.status, false);
+  }
+  const envelope = parseCompletionEnvelope(parsed);
+  return {
+    content: envelope.choices[0]!.message.content,
+    usage: {
+      inputTokens: envelope.usage.prompt_tokens,
+      outputTokens: envelope.usage.completion_tokens,
+      totalTokens: envelope.usage.total_tokens,
+    },
+  };
+}
+
+export function requestChat(
+  options: DeepSeekOptions,
+  messages: ChatCompletionMessage[],
+): Promise<DeepSeekChatResult> {
+  return requestCompletion(options, messages);
+}
+
+export const MEMORY_CATEGORIES = [
+  "identity",
+  "preference",
+  "relationship",
+  "goal",
+  "routine",
+  "wellbeing",
+  "study",
+  "interest",
+] as const;
+
+export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
+export type MemoryConfidence = "low" | "medium" | "high";
+
+function isMemoryCategory(value: unknown): value is MemoryCategory {
+  return (
+    typeof value === "string" &&
+    MEMORY_CATEGORIES.some((allowed) => allowed === value)
+  );
+}
+
+export interface MemorySourceMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ExtractedMemoryFact {
+  category: MemoryCategory;
+  factKey: string;
+  factValue: string;
+  confidence: MemoryConfidence;
+  sourceMessageId: number;
+}
+
+export interface ExtractedMemoryEpisode {
+  category: MemoryCategory;
+  content: string;
+  people: string[];
+  topics: string[];
+  occurredAt: number;
+  sourceMessageId: number;
+}
+
+export interface MemoryUpdateResult {
+  summary: string;
+  throughMessageId: number;
+  stableFacts: ExtractedMemoryFact[];
+  episodes: ExtractedMemoryEpisode[];
+  usage: DeepSeekUsage;
+}
+
+export interface MemoryUpdateInput {
+  previousSummary: string | null;
+  sourceMessages: MemorySourceMessage[];
+}
+
+function parseMemoryUpdate(
+  content: string,
+  sourceMessages: MemorySourceMessage[],
+): Omit<MemoryUpdateResult, "usage"> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new DeepSeekError("invalid_memory_json", 200, false);
+  }
+  if (!isRecord(parsed)) {
+    throw new DeepSeekError("invalid_memory_json", 200, false);
+  }
+  const summary = parsed.summary;
+  const throughMessageId = parsed.through_message_id;
+  const facts = parsed.stable_facts;
+  const episodes = parsed.episodes;
+  const userSourceIds = new Set(
+    sourceMessages.filter((message) => message.role === "user").map((message) => message.id),
+  );
+  const lastMessageId = sourceMessages.at(-1)?.id;
+  if (
+    typeof summary !== "string" ||
+    summary.length > 8_000 ||
+    !isNonNegativeInteger(throughMessageId) ||
+    throughMessageId !== lastMessageId ||
+    !Array.isArray(facts) ||
+    !Array.isArray(episodes) ||
+    facts.length + episodes.length > 50
+  ) {
+    throw new DeepSeekError("invalid_memory_json", 200, false);
+  }
+
+  const normalizedFacts: ExtractedMemoryFact[] = facts.map((fact) => {
+    if (!isRecord(fact)) {
+      throw new DeepSeekError("invalid_memory_json", 200, false);
+    }
+    const category = fact.category;
+    const factKey = fact.fact_key;
+    const factValue = fact.fact_value;
+    const confidence = fact.confidence;
+    const sourceMessageId = fact.source_message_id;
+    if (
+      !isMemoryCategory(category) ||
+      typeof factKey !== "string" ||
+      !/^[a-z0-9_:-]{1,100}$/.test(factKey) ||
+      typeof factValue !== "string" ||
+      factValue.length === 0 ||
+      factValue.length > 1_000 ||
+      (confidence !== "low" &&
+        confidence !== "medium" &&
+        confidence !== "high") ||
+      !isNonNegativeInteger(sourceMessageId) ||
+      !userSourceIds.has(sourceMessageId)
+    ) {
+      throw new DeepSeekError("invalid_memory_json", 200, false);
+    }
+    return {
+      category,
+      factKey,
+      factValue,
+      confidence,
+      sourceMessageId,
+    };
+  });
+
+  const normalizedEpisodes: ExtractedMemoryEpisode[] = episodes.map((episode) => {
+    if (!isRecord(episode)) {
+      throw new DeepSeekError("invalid_memory_json", 200, false);
+    }
+    const category = episode.category;
+    const content = episode.content;
+    const people = episode.people;
+    const topics = episode.topics;
+    const occurredAt = episode.occurred_at;
+    const sourceMessageId = episode.source_message_id;
+    const validLabels = (value: unknown): value is string[] =>
+      Array.isArray(value) && value.length <= 10 &&
+      value.every((entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 100);
+    if (
+      !isMemoryCategory(category) ||
+      typeof content !== "string" || content.length === 0 || content.length > 1_000 ||
+      !validLabels(people) || !validLabels(topics) ||
+      !isNonNegativeInteger(occurredAt) ||
+      !isNonNegativeInteger(sourceMessageId) || !userSourceIds.has(sourceMessageId)
+    ) {
+      throw new DeepSeekError("invalid_memory_json", 200, false);
+    }
+    return {
+      category,
+      content,
+      people,
+      topics,
+      occurredAt,
+      sourceMessageId,
+    };
+  });
+
+  return {
+    summary,
+    throughMessageId,
+    stableFacts: normalizedFacts,
+    episodes: normalizedEpisodes,
+  };
+}
+
+export async function requestMemoryUpdate(
+  options: DeepSeekOptions,
+  input: MemoryUpdateInput,
+): Promise<MemoryUpdateResult> {
+  if (input.sourceMessages.length === 0) {
+    throw new DeepSeekError("invalid_memory_json", null, false);
+  }
+  const result = await requestCompletion(
+    options,
+    [
+      {
+        role: "system",
+        content:
+          "仅从用户明确说出的内容更新摘要和记忆，不得从助手回复推断。输出 JSON：summary、through_message_id、stable_facts、episodes。stable_facts 只放长期稳定事实，每项包含 category、fact_key、fact_value、confidence、source_message_id；短期情绪、一次性事件和阶段状态必须放 episodes，每项包含 category、content、people、topics、occurred_at、source_message_id，不得把短期情绪提升为稳定事实。",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          previousSummary: input.previousSummary,
+          allowedCategories: MEMORY_CATEGORIES,
+          messages: input.sourceMessages,
+        }),
+      },
+    ],
+    { type: "json_object" },
+  );
+  return { ...parseMemoryUpdate(result.content, input.sourceMessages), usage: result.usage };
+}
+
+const PERSONA_ARRAY_PATHS = [
+  "relationship.confidenceFacts",
+  "relationship.rules",
+  "relationship.meetingRules",
+  "coreTraits.labels",
+  "coreTraits.rules",
+  "expression.markers",
+  "expression.phraseEndings",
+  "expression.rules",
+  "expression.prohibited",
+  "comfort.sequence",
+  "comfort.rules",
+  "advice.rules",
+  "viewOfOwner.rules",
+  "interests.topics",
+  "interests.publicFigures",
+  "interests.rules",
+  "uncertainty.unknowns",
+  "uncertainty.prohibitedInferences",
+  "intimacy.rules",
+  "intimacy.prohibitedTerms",
+  "rhythm.rules",
+  "proactive.rules",
+  "knowledge.rules",
+] as const;
+
+type PersonaArrayPath = (typeof PERSONA_ARRAY_PATHS)[number];
+type PersonaScalarPath = "comfort.opening";
+export type PersonaDraftPath = PersonaArrayPath | PersonaScalarPath;
+
+export interface PersonaDraftOperation {
+  operation: "replace" | "add";
+  path: PersonaDraftPath;
+  value: string | string[];
+}
+
+export interface PersonaDraftProposal {
+  summary: string;
+  impactScope: string;
+  confidence: MemoryConfidence;
+  operations: PersonaDraftOperation[];
+  usage: DeepSeekUsage;
+}
+
+export interface MaterializedPersonaPatch {
+  path: PersonaDraftPath;
+  value: string | string[];
+}
+
+function isPersonaArrayPath(value: unknown): value is PersonaArrayPath {
+  return (
+    typeof value === "string" &&
+    PERSONA_ARRAY_PATHS.some((allowed) => allowed === value)
+  );
+}
+
+function normalizeDraftText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]+/gu, " ").replace(/\s+/gu, " ").trim();
+}
+
+function normalizeAdditionText(value: string): string {
+  const normalized = normalizeDraftText(value);
+  const wrapped = normalized.match(/^<\s*(.*?)\s*>$/u);
+  return wrapped?.[1]?.trim() || normalized;
+}
+
+function resolveAdditionPath(
+  triggerText: string,
+  selectedPath: PersonaArrayPath,
+): PersonaArrayPath {
+  const isDirective = /(?:不要|不再|减少|增加|必须|只能|仅|避免|禁止|频率|每次)/u.test(
+    triggerText,
+  );
+  const controlsExpression = /(?:🌚|表情|emoji|语气|口头|回复|消息|对话|说|使用)/iu.test(
+    triggerText,
+  );
+  return isDirective && controlsExpression ? "expression.rules" : selectedPath;
+}
+
+function invalidPersonaDraft(detail: string): never {
+  throw new DeepSeekError("invalid_persona_draft", 200, false, detail);
+}
+
+function parsePersonaDraftProposal(
+  content: string,
+  triggerText: string,
+  draftOperation: "correction" | "addition",
+  usage: DeepSeekUsage,
+): PersonaDraftProposal {
+  let parsed: unknown;
+  try {
+    const normalizedContent = content
+      .trim()
+      .replace(/^```(?:json)?\s*/iu, "")
+      .replace(/\s*```$/u, "");
+    parsed = JSON.parse(normalizedContent);
+  } catch {
+    return invalidPersonaDraft("json_parse");
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.operations)) {
+    return invalidPersonaDraft("root_schema");
+  }
+  const rawSummary = parsed.summary;
+  const rawImpactScope = parsed.impactScope ?? parsed.impact_scope;
+  const confidence: MemoryConfidence =
+    parsed.confidence === "low" ||
+    parsed.confidence === "medium" ||
+    parsed.confidence === "high"
+      ? parsed.confidence
+      : "medium";
+  if (parsed.operations.length === 0 || parsed.operations.length > 16) {
+    return invalidPersonaDraft("operation_count");
+  }
+
+  let operations: PersonaDraftOperation[] = parsed.operations.map((entry) => {
+    if (!isRecord(entry)) return invalidPersonaDraft("operation_schema");
+    const operation = entry.operation;
+    const path = entry.path;
+    const value = entry.value;
+    const isArrayPath = isPersonaArrayPath(path);
+    const isScalarPath = path === "comfort.opening";
+    if (
+      (operation !== "replace" && operation !== "add") ||
+      (!isArrayPath && !isScalarPath) ||
+      (isScalarPath && (operation !== "replace" || typeof value !== "string")) ||
+      (isArrayPath &&
+        !(
+          typeof value === "string" ||
+          (Array.isArray(value) && value.every((item) => typeof item === "string"))
+        ))
+    ) {
+      return invalidPersonaDraft("operation_schema");
+    }
+    const normalizedValue =
+      typeof value === "string"
+        ? normalizeDraftText(value)
+        : Array.isArray(value)
+          ? value.map((item) =>
+              typeof item === "string" ? normalizeDraftText(item) : "",
+            )
+          : invalidPersonaDraft("operation_schema");
+    if (
+      (typeof normalizedValue === "string" && normalizedValue.length === 0) ||
+      (Array.isArray(normalizedValue) &&
+        (normalizedValue.length === 0 ||
+          normalizedValue.some((item) => item.length === 0 || item.length > 500)))
+    ) {
+      return invalidPersonaDraft("empty_or_oversize_value");
+    }
+    return { operation, path, value: normalizedValue };
+  });
+
+  const normalizedTrigger = normalizeAdditionText(triggerText);
+  if (draftOperation === "addition") {
+    const selected = operations[0];
+    if (
+      operations.length !== 1 ||
+      selected?.operation !== "add" ||
+      !isPersonaArrayPath(selected.path) ||
+      normalizedTrigger.length === 0 ||
+      normalizedTrigger.length > 500
+    ) {
+      return invalidPersonaDraft("addition_schema");
+    }
+    const resolvedPath = resolveAdditionPath(normalizedTrigger, selected.path);
+    operations = [
+      {
+        operation: "add",
+        path: resolvedPath,
+        value: [normalizedTrigger],
+      },
+    ];
+    return {
+      summary: `新增到 ${resolvedPath}`,
+      impactScope: resolvedPath,
+      confidence,
+      operations,
+      usage,
+    };
+  }
+
+  let summary =
+    typeof rawSummary === "string"
+      ? normalizeDraftText(rawSummary).slice(0, 300)
+      : "";
+  if (
+    summary.length === 0 ||
+    (normalizedTrigger.length >= 12 && summary.includes(normalizedTrigger))
+  ) {
+    summary = `调整 ${operations.map((operation) => operation.path).join("、")} 的人格规则`;
+  }
+  if (
+    normalizedTrigger.length >= 12 &&
+    JSON.stringify(operations).includes(normalizedTrigger)
+  ) {
+    return invalidPersonaDraft("copied_trigger");
+  }
+  let impactScope =
+    typeof rawImpactScope === "string"
+      ? normalizeDraftText(rawImpactScope).slice(0, 200)
+      : "";
+  if (
+    normalizedTrigger.length >= 12 &&
+    impactScope.includes(normalizedTrigger)
+  ) {
+    impactScope = operations.map((operation) => operation.path).join(", ");
+  }
+  if (impactScope.length === 0) {
+    impactScope = operations.map((operation) => operation.path).join(", ");
+  }
+  return { summary, impactScope, confidence, operations, usage };
+}
+
+export async function requestPersonaDraft(
+  options: DeepSeekOptions,
+  input: {
+    operation: "correction" | "addition";
+    currentSnapshot: PersonaSnapshot;
+    triggerText: string;
+  },
+): Promise<PersonaDraftProposal> {
+  const request = async (strictRetry: boolean): Promise<DeepSeekChatResult> =>
+    requestCompletion(
+      { ...options, thinking: "enabled" },
+      [
+        {
+          role: "system",
+          content:
+            input.operation === "addition"
+              ? `${strictRetry ? "上一份草稿未通过验证。重新生成；" : ""}只输出 JSON：summary、impactScope、confidence、operations。你只负责为 correctionEvidence 选择一个最匹配的 allowedArrayPaths；operations 必须恰好一项，operation 必须是 add。不得推断、扩写、补充或拆分新事实；value 必须原样复制 correctionEvidence。带有“不要、减少、必须、仅在、频率”等约束的表达方式指令必须进入 expression.rules，expression.markers 只能存放模型可以直接说出的短词、笑声或表情。confidence 只能是 low、medium 或 high。`
+              : `${strictRetry ? "上一份草稿未通过验证。重新生成；" : ""}只输出 JSON：summary、impactScope、confidence、operations；confidence 只能是 low、medium 或 high。每个 operation 只允许 operation=replace/add、显式允许的 path 和字符串或字符串数组 value。不得修改身份、同意、现实边界或安全规则；summary 和 operation.value 必须改写为简洁人格规则，不得整段复制用户原文。`,
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            operation: input.operation,
+            allowedArrayPaths: PERSONA_ARRAY_PATHS,
+            allowedScalarPaths: ["comfort.opening"],
+            currentSnapshot:
+              input.operation === "correction"
+                ? JSON.parse(canonicalPersonaJson(input.currentSnapshot))
+                : undefined,
+            correctionEvidence: input.triggerText,
+          }),
+        },
+      ],
+      { type: "json_object" },
+    );
+
+  const first = await request(false);
+  try {
+    return parsePersonaDraftProposal(
+      first.content,
+      input.triggerText,
+      input.operation,
+      first.usage,
+    );
+  } catch (error) {
+    if (
+      !(error instanceof DeepSeekError) ||
+      error.code !== "invalid_persona_draft"
+    ) {
+      throw error;
+    }
+  }
+
+  const second = await request(true);
+  const proposal = parsePersonaDraftProposal(
+    second.content,
+    input.triggerText,
+    input.operation,
+    second.usage,
+  );
+  return {
+    ...proposal,
+    usage: {
+      inputTokens: first.usage.inputTokens + second.usage.inputTokens,
+      outputTokens: first.usage.outputTokens + second.usage.outputTokens,
+      totalTokens: first.usage.totalTokens + second.usage.totalTokens,
+    },
+  };
+}
+
+function currentArrayValue(
+  snapshot: PersonaSnapshot,
+  path: PersonaArrayPath,
+): string[] {
+  switch (path) {
+    case "relationship.confidenceFacts":
+      return snapshot.relationship.confidenceFacts;
+    case "relationship.rules":
+      return snapshot.relationship.rules;
+    case "relationship.meetingRules":
+      return snapshot.relationship.meetingRules;
+    case "coreTraits.labels":
+      return snapshot.coreTraits.labels;
+    case "coreTraits.rules":
+      return snapshot.coreTraits.rules;
+    case "expression.markers":
+      return snapshot.expression.markers;
+    case "expression.phraseEndings":
+      return snapshot.expression.phraseEndings;
+    case "expression.rules":
+      return snapshot.expression.rules;
+    case "expression.prohibited":
+      return snapshot.expression.prohibited;
+    case "comfort.sequence":
+      return snapshot.comfort.sequence;
+    case "comfort.rules":
+      return snapshot.comfort.rules;
+    case "advice.rules":
+      return snapshot.advice.rules;
+    case "viewOfOwner.rules":
+      return snapshot.viewOfOwner.rules;
+    case "interests.topics":
+      return snapshot.interests.topics;
+    case "interests.publicFigures":
+      return snapshot.interests.publicFigures;
+    case "interests.rules":
+      return snapshot.interests.rules;
+    case "uncertainty.unknowns":
+      return snapshot.uncertainty.unknowns;
+    case "uncertainty.prohibitedInferences":
+      return snapshot.uncertainty.prohibitedInferences;
+    case "intimacy.rules":
+      return snapshot.intimacy.rules;
+    case "intimacy.prohibitedTerms":
+      return snapshot.intimacy.prohibitedTerms;
+    case "rhythm.rules":
+      return snapshot.rhythm.rules;
+    case "proactive.rules":
+      return snapshot.proactive.rules;
+    case "knowledge.rules":
+      return snapshot.knowledge.rules;
+  }
+}
+
+export function materializePersonaPatch(
+  snapshot: PersonaSnapshot,
+  operations: PersonaDraftOperation[],
+): MaterializedPersonaPatch[] {
+  return operations.map((operation) => {
+    if (operation.path === "comfort.opening") {
+      if (typeof operation.value !== "string" || operation.operation !== "replace") {
+        return invalidPersonaDraft("materialization_schema");
+      }
+      return { path: operation.path, value: operation.value };
+    }
+    const incoming = Array.isArray(operation.value)
+      ? operation.value
+      : [operation.value];
+    return {
+      path: operation.path,
+      value:
+        operation.operation === "replace"
+          ? incoming
+          : [...new Set([...currentArrayValue(snapshot, operation.path), ...incoming])],
+    };
+  });
+}

@@ -1,0 +1,56 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "personal-telegram-ai-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  },
+  "vars": {
+    "DEEPSEEK_MODEL": "deepseek-v4-flash",
+    "DEEPSEEK_THINKING_MODE": "disabled",
+    "MAX_OUTPUT_TOKENS": "100",
+    "DAILY_MESSAGE_LIMIT": "200",
+    "MEMORY_UPDATE_INTERVAL": "8",
+    "PUBLIC_BASE_URL": "https://example.invalid"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "personal-telegram-ai-bot-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ai": { "binding": "AI" },
+  "vectorize": [
+    { "binding": "MEMORY_INDEX", "index_name": "personal-telegram-ai-bot-memory" }
+  ],
+  "workflows": [
+    {
+      "binding": "REMINDER_WORKFLOW",
+      "name": "personal-telegram-ai-bot-reminders",
+      "class_name": "ReminderWorkflow"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "MESSAGE_QUEUE", "queue": "personal-telegram-ai-bot-main" }
+    ],
+    "consumers": [
+      {
+        "queue": "personal-telegram-ai-bot-main",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "dead_letter_queue": "personal-telegram-ai-bot-dlq",
+        "max_concurrency": 1,
+        "retry_delay": 10
+      }
+    ]
+  },
+  "triggers": { "crons": ["*/15 * * * *"] }
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "persona-telegram-bot-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "DEEPSEEK_MODEL": "deepseek-v4-pro",
+    "DEEPSEEK_THINKING_MODE": "disabled",
+    "MAX_OUTPUT_TOKENS": "100",
+    "DAILY_MESSAGE_LIMIT": "200",
+    "MEMORY_UPDATE_INTERVAL": "8",
+    "PUBLIC_BASE_URL": "https://persona.example"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "persona-telegram-bot-test",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "MESSAGE_QUEUE", "queue": "persona-telegram-bot-test-main" }
+    ],
+    "consumers": [
+      { "queue": "persona-telegram-bot-test-main", "max_batch_size": 1 }
+    ]
+  }
+}
