@@ -40,6 +40,6 @@ The Windows application is under active development. Do not use pre-release buil
 
 Chinese documentation: [README_ZH.md](README_ZH.md)
 
-Technical documentation: [Architecture](docs/architecture.md) · [Release checklist](docs/release-checklist.md)
+Technical documentation: [User guide](docs/user-guide.md) · [Architecture](docs/architecture.md) · [Release checklist](docs/release-checklist.md)
 
 License: [MIT](LICENSE)
