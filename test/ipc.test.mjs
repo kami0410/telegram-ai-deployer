@@ -77,3 +77,8 @@ test("environment check can complete Cloudflare login through the bundled runtim
   assert.match(source, /runBundledWrangler\(\["login"\]\)/u);
   assert.doesNotMatch(source, /npx|npm\.cmd/u);
 });
+
+test("environment check parses whoami output instead of trusting the exit code", async () => {
+  const source = await readFile("app/ipc.mjs", "utf8");
+  assert.match(source, /isWranglerAuthenticated/u);
+});

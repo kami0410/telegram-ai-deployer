@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resourceNames, extractWorkerUrl, queueListContains } from "../lib/cloudflare.mjs";
+import { resourceNames, extractWorkerUrl, queueListContains, isWranglerAuthenticated } from "../lib/cloudflare.mjs";
 
 test("derives isolated Cloudflare resource names", () => {
   assert.deepEqual(resourceNames("example-bot"), {
@@ -19,6 +19,14 @@ test("extracts only a workers.dev deployment URL", () => {
     "https://example-bot.example-account.workers.dev",
   );
   assert.throws(() => extractWorkerUrl("https://example.invalid"), /workers.dev/iu);
+});
+
+test("detects wrangler authentication from whoami output text", () => {
+  // wrangler whoami exits 0 even when unauthenticated, so callers must parse the output.
+  assert.equal(isWranglerAuthenticated("You are not authenticated. Please run `wrangler login`."), false);
+  assert.equal(isWranglerAuthenticated("You are logged in with an OAuth Token, associated with the email user@example.com."), true);
+  assert.equal(isWranglerAuthenticated("You are logged in with an API Token."), true);
+  assert.equal(isWranglerAuthenticated(""), false);
 });
 
 test("queue lookup compares an exact table cell instead of a substring", () => {

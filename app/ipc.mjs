@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { runDeployment, resumeDeployment } from "../lib/deploy.mjs";
-import { createDeploymentDependencies } from "../lib/cloudflare.mjs";
+import { createDeploymentDependencies, isWranglerAuthenticated } from "../lib/cloudflare.mjs";
 import { runCommand } from "../lib/runner.mjs";
 
 const CHANNELS = [
@@ -42,13 +42,16 @@ export function registerIpc({
   });
 
   ipcMain.handle("deploy:check-environment", async () => {
+    // wrangler whoami exits 0 even when unauthenticated, so the output text is authoritative.
+    const isReady = (result) => result.code === 0 && isWranglerAuthenticated(result.stdout + result.stderr);
     let result = await runBundledWrangler(["whoami"]);
-    if (result.code !== 0) {
+    if (!isReady(result)) {
       const login = await runBundledWrangler(["login"]);
       if (login.code !== 0) return { ready: false, message: "Cloudflare 授权未完成，可再次检查" };
       result = await runBundledWrangler(["whoami"]);
     }
-    return { ready: result.code === 0, message: result.code === 0 ? "Cloudflare 已连接" : "Cloudflare 登录状态不可用" };
+    const ready = isReady(result);
+    return { ready, message: ready ? "Cloudflare 已连接" : "Cloudflare 登录状态不可用" };
   });
 
   ipcMain.handle("deploy:select-persona", async () => {
