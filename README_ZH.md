@@ -1,3 +1,10 @@
+<div align="right">
+
+[![English](https://img.shields.io/badge/lang-English-lightgrey.svg)](README.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue.svg)](README_ZH.md)
+
+</div>
+
 # Cloudflare Telegram AI 机器人部署器
 
 > [!IMPORTANT]
@@ -36,8 +43,6 @@
 ## 当前状态
 
 Windows 应用正在开发。不要用预发布版本处理无法替代的重要数据。
-
-English documentation: [README.md](README.md)
 
 技术文档：[使用指南（中文）](docs/user-guide-zh.md) · [架构说明](docs/architecture.md) · [发布检查清单](docs/release-checklist.md)
 

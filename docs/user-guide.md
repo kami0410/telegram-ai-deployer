@@ -1,3 +1,5 @@
+[English](user-guide.md) · [中文](user-guide-zh.md)
+
 # User Guide
 
 A step-by-step walkthrough of the Cloudflare Telegram AI Bot Deployer, in the order you will actually use it.

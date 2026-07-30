@@ -1,3 +1,5 @@
+[English](user-guide.md) · [中文](user-guide-zh.md)
+
 # 使用指南（中文）
 
 本指南按实际使用顺序，详细说明 Cloudflare Telegram AI 机器人部署器的每一步操作。

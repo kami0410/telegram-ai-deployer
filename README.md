@@ -1,3 +1,10 @@
+<div align="right">
+
+[![English](https://img.shields.io/badge/lang-English-blue.svg)](README.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey.svg)](README_ZH.md)
+
+</div>
+
 # Cloudflare Telegram AI Bot Deployer
 
 > [!IMPORTANT]
@@ -37,8 +44,6 @@ These connections **do not follow the Windows system proxy**. In regions where `
 ## Status
 
 The Windows application is under active development. Do not use pre-release builds for important or irreplaceable data.
-
-Chinese documentation: [README_ZH.md](README_ZH.md)
 
 Technical documentation: [User guide](docs/user-guide.md) · [Architecture](docs/architecture.md) · [Release checklist](docs/release-checklist.md)
 
