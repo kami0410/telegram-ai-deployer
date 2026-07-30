@@ -27,7 +27,7 @@
 | 项目 | 获取方式 | 费用 |
 |---|---|---|
 | Cloudflare 账户 | [dash.cloudflare.com](https://dash.cloudflare.com) 注册 | 注册免费 |
-| Cloudflare Workers 套餐 | 同一后台 → Workers → Plans | **本模板用到 Queues 和 Workflows，需要 Workers Paid（约 $5/月起）**；免费套餐会在"创建队列"步骤报错 |
+| Cloudflare Workers 套餐 | 无需升级，免费套餐即可 | Queues 自 2026 年 2 月起纳入免费套餐（每天 1 万次操作额度），Workflows 也有免费额度（每天 10 万次请求），个人使用足够；注意免费版队列消息只保留 24 小时 |
 | Telegram Bot Token | Telegram 内找 [@BotFather](https://t.me/BotFather) → 发送 `/newbot` → 按提示起名 → 得到形如 `123456:ABC-DEF...` 的 Token | 免费 |
 | DeepSeek API Key | [platform.deepseek.com](https://platform.deepseek.com) → API Keys → 创建 | 按量计费，先小额充值 |
 
@@ -143,8 +143,8 @@ A：这次是真的连上了但 Token 不对。检查是否复制完整、有无
 **Q：报"DeepSeek key 无效（HTTP 401/402）"？**
 A：Key 错误或余额不足，去 DeepSeek 平台核对。
 
-**Q：queues 步骤失败，提示需要付费？**
-A：Cloudflare Queues/Workflows 需要 Workers Paid 套餐，升级后点「恢复部署」。
+**Q：免费套餐的额度够用吗？**
+A：个人使用完全够。免费套餐每天包含：Worker 请求 10 万次、Queues 操作 1 万次、Workflows 请求 10 万次、D1 读取 500 万行。只有免费版队列的消息保留期是 24 小时（付费版 14 天），对机器人场景没有影响。真的超限了再去后台升级 Workers Paid 即可。
 
 **Q：可以部署多个机器人吗？**
 A：可以。每个机器人用不同的**项目名称**和**独立空目录**即可，资源完全隔离。
