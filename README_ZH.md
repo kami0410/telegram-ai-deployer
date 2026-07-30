@@ -39,6 +39,6 @@ Windows 应用正在开发。不要用预发布版本处理无法替代的重要
 
 English documentation: [README.md](README.md)
 
-技术文档：[架构说明](docs/architecture.md) · [发布检查清单](docs/release-checklist.md)
+技术文档：[使用指南（中文）](docs/user-guide-zh.md) · [架构说明](docs/architecture.md) · [发布检查清单](docs/release-checklist.md)
 
 许可证：[MIT](LICENSE)
