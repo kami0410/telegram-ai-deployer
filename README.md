@@ -1,50 +1,49 @@
 <div align="right">
 
-[![English](https://img.shields.io/badge/lang-English-blue.svg)](README.md)
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey.svg)](README_ZH.md)
+[![English](https://img.shields.io/badge/lang-English-lightgrey.svg)](README_EN.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue.svg)](README.md)
 
 </div>
 
-# Cloudflare Telegram AI Bot Deployer
+# Cloudflare Telegram AI 机器人部署器
 
 > [!IMPORTANT]
-> This independent project is not affiliated with or endorsed by Cloudflare, Telegram, or DeepSeek. Before use, read [DISCLAIMER.md](DISCLAIMER.md), [PRIVACY.md](PRIVACY.md), and the third-party service terms and pricing.
+> 本项目是独立开源工具，与 Cloudflare、Telegram 或 DeepSeek 不存在隶属、授权、背书或合作关系。使用前请阅读 [中文免责声明](DISCLAIMER_ZH.md)、[隐私说明](PRIVACY.md)以及第三方服务条款和价格。
 
-A Windows visual wizard for deploying a private, text-only Telegram AI bot to a Cloudflare account. It creates the required Worker, D1 database, queues, Vectorize index, workflow, secrets, webhook, and health check.
+这是一个 Windows 可视化向导，用于把私人、纯文字 Telegram AI 机器人部署到用户自己的 Cloudflare 账户。它会创建 Worker、D1、队列、Vectorize、Workflow、Secrets、Webhook，并完成健康检查。
 
-The first release targets Windows 10/11 x64. DeepSeek V4 Flash is the default model; V4 Pro and an explicit thinking-mode toggle are also available.
+首个版本支持 Windows 10/11 x64。默认模型为成本较低的 DeepSeek V4 Flash，也可以选择 V4 Pro，并独立开关思考模式。
 
-## Network requirements
+## 网络要求
 
-The wizard opens direct HTTPS connections from your computer to:
+部署过程会从你的电脑直接发起 HTTPS 连接：
 
-- `api.telegram.org` — bot token validation and webhook registration
-- `api.deepseek.com` — API key validation
-- Cloudflare service APIs — through the bundled Wrangler CLI
+- `api.telegram.org` —— 验证 Bot Token、注册 Webhook
+- `api.deepseek.com` —— 验证 API Key
+- Cloudflare 服务 API —— 通过内置的 Wrangler CLI
 
-These connections **do not follow the Windows system proxy**. In regions where `api.telegram.org` is not directly reachable (for example, mainland China), the deployment stops at the `secrets` step with a "cannot connect to api.telegram.org" error. To fix this:
+这些连接**不走 Windows 系统代理**。在无法直连 `api.telegram.org` 的地区（例如中国大陆），部署会在 `secrets` 步骤报"无法连接 api.telegram.org"。解决方法：
 
-- **Recommended:** enable **TUN (global) mode** in your proxy client (Clash Verge, v2rayN, etc.) so traffic from every application is routed through the proxy, then retry the failed step.
-- **Alternative:** close the app and relaunch it from a terminal with environment variables (the bundled Node.js 24 runtime honors them):
+- **推荐**：在代理客户端（Clash Verge、v2rayN 等）中开启 **TUN（全局）模式**，让所有应用的流量都经过代理，然后重试失败的步骤。
+- **备选**：关闭应用后，在终端中带环境变量启动（应用内置的 Node.js 24 运行时支持该方式）：
 
   ```powershell
   $env:NODE_USE_ENV_PROXY = "1"
-  $env:HTTPS_PROXY = "http://127.0.0.1:7897"  # adjust to your proxy port
-  & "C:\path\to\Cloudflare Telegram AI Bot Deployer.exe"
+  $env:HTTPS_PROXY = "http://127.0.0.1:7897"  # 端口按你的代理实际配置修改
+  & "C:\你的路径\Cloudflare Telegram AI Bot Deployer.exe"
   ```
 
-## Security model
+## 安全设计
 
-- Credentials are entered locally, cleared from the form after submission, and sent to Cloudflare through Wrangler secret input.
-- Wrangler is bundled and version-pinned; the application never runs `npm`, `npx`, or a command resolved through `PATH`.
-- Credentials, imported persona text, deployment state, generated projects, and logs are excluded from Git.
-- The application loads local assets only and contains no telemetry.
-- Review [SECURITY.md](SECURITY.md) before reporting a vulnerability. Never post credentials or private prompts in a public issue.
+- 密钥仅在本地输入，提交后立即清空表单，通过 Wrangler Secret 标准输入写入 Cloudflare。
+- 密钥、人格正文、部署状态、生成工程和日志不会进入 Git。
+- 应用只加载本地资源，不包含遥测。
+- 报告安全问题前请阅读 [SECURITY.md](SECURITY.md)，不要在公开 Issue 中提交密钥或私人 Prompt。
 
-## Status
+## 当前状态
 
-The Windows application is under active development. Do not use pre-release builds for important or irreplaceable data.
+Windows 应用正在开发。不要用预发布版本处理无法替代的重要数据。
 
-Technical documentation: [User guide](docs/user-guide.md) · [Architecture](docs/architecture.md) · [Release checklist](docs/release-checklist.md)
+技术文档：[使用指南（中文）](docs/user-guide-zh.md) · [架构说明](docs/architecture.md) · [发布检查清单](docs/release-checklist.md)
 
-License: [MIT](LICENSE)
+许可证：[MIT](LICENSE)
