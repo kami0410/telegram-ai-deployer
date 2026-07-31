@@ -29,7 +29,7 @@ export function detectSensitive(text, filename = "") {
   return [...new Set(findings)];
 }
 
-const skippedDirectories = new Set([".git", "node_modules", "dist", "out", ".wrangler"]);
+const skippedDirectories = new Set([".git", "node_modules", "dist", "out", ".wrangler", ".workbuddy"]);
 const skippedFiles = new Set(["package-lock.json", "privacy-rules.mjs", "privacy-scan.ps1", "privacy-gate.test.mjs", "template-privacy.test.mjs", "cloudflare.test.mjs", "vitest.config.ts"]);
 const textExtensions = new Set([".cjs", ".css", ".html", ".js", ".json", ".jsonc", ".md", ".mjs", ".ps1", ".sql", ".ts", ".txt", ".yml", ".yaml"]);
 const imageExtensions = new Set([".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".webp"]);

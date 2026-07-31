@@ -59,7 +59,7 @@ No Node.js, npm, or any other runtime is required — everything is bundled.
 
 ## 3. Installation
 
-Download the latest release from [Releases](https://github.com/kami0410/telegram-ai-deployer/releases):
+Download the latest release from [Releases](../../releases):
 
 - **`Telegram.AI.Deployer-x.x.x-x64.exe`** — installer. Double-click → choose an install directory → desktop and Start Menu shortcuts are created. No administrator rights needed (per-user install).
 - **`Telegram.AI.Deployer-x.x.x-x64.zip`** — portable build. Extract anywhere and run the exe inside.

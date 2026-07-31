@@ -59,7 +59,7 @@
 
 ## 三、安装
 
-从 [Releases](https://github.com/kami0410/telegram-ai-deployer/releases) 下载最新版：
+从 [Releases](../../releases) 下载最新版：
 
 - **`Telegram.AI.Deployer-x.x.x-x64.exe`**：安装包。双击 → 可选安装目录 → 自动创建桌面和开始菜单快捷方式。不需要管理员权限（安装到当前用户目录）。
 - **`Telegram.AI.Deployer-x.x.x-x64.zip`**：免安装绿色版。解压到任意目录，运行其中的 exe 即可。
