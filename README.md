@@ -14,6 +14,14 @@
 
 首个版本支持 Windows 10/11 x64。默认模型为成本较低的 DeepSeek V4 Flash，也可以选择 V4 Pro，并独立开关思考模式。
 
+## 已修复的部署问题
+
+- **导入人格文件无响应：** 已修复打包版 Electron 预加载脚本的兼容性，`选择文件` 可以正常打开 Windows 文件选择框并导入 `.txt`、`.md` 或 `.json` 人格 Prompt。
+- **首次部署卡在 `workers.dev`：** 对尚未注册 `workers.dev` 子域名的全新 Cloudflare 账户，应用会明确提示先在 Cloudflare Dashboard 完成一次子域名注册，再点击“恢复部署”。同一账户只需操作一次。
+- **最后一步 `health: fetch failed`：** 健康检查会自动重试；如果 Worker 已成功部署但短暂无法访问，应用会显示可恢复提示，而不是把已部署的资源误报为失败。
+
+详细处理步骤见：[首次部署故障处理](docs/first-use-troubleshooting-zh.md)。
+
 ## 网络要求
 
 部署过程会从你的电脑直接发起 HTTPS 连接：

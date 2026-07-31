@@ -14,6 +14,14 @@ A Windows visual wizard for deploying a private, text-only Telegram AI bot to a 
 
 The first release targets Windows 10/11 x64. DeepSeek V4 Flash is the default model; V4 Pro and an explicit thinking-mode toggle are also available.
 
+## Deployment fixes included
+
+- **Persona file import did not respond:** the packaged Electron preload compatibility issue is fixed. **Choose file** now opens the Windows picker and imports `.txt`, `.md`, or `.json` persona prompts.
+- **First deployment stopped at `workers.dev`:** new Cloudflare accounts that have not registered a `workers.dev` subdomain receive a clear instruction to complete that one-time Dashboard step and then resume deployment.
+- **Final `health: fetch failed`:** health checks now retry. When a Worker was deployed but is temporarily unreachable, the app gives recovery guidance instead of treating existing resources as a failed deployment.
+
+See the [first-use troubleshooting guide](docs/first-use-troubleshooting-zh.md) for the recovery steps.
+
 ## Network requirements
 
 The wizard opens direct HTTPS connections from your computer to:
