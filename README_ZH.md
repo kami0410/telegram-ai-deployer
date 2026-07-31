@@ -4,4 +4,6 @@
 
 English documentation has moved to [README_EN.md](README_EN.md).
 
-使用前请阅读免责声明：[DISCLAIMER_ZH.md](DISCLAIMER_ZH.md) · [DISCLAIMER.md](DISCLAIMER.md)
+使用前请阅读免责声明：[DISCLAIMER_ZH.md](DISCLAIMER_ZH.md) · [DISCLAIMER.md](DISCLAIMER.md)，以及[隐私说明](PRIVACY.md)。
+
+详细使用步骤见[中文使用指南](docs/user-guide-zh.md)。
