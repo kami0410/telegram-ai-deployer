@@ -1,6 +1,6 @@
 {
   "name": "cloudflare-telegram-ai-bot-deployer",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Privacy-focused Windows deployment wizard for a Cloudflare Telegram AI bot.",
   "type": "module",
   "private": false,
