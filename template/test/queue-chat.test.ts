@@ -397,6 +397,34 @@ describe("queue chat outbox", () => {
     ).toEqual({ status: "completed" });
   });
 
+  it("strips stage directions from assistant text before delivery", async () => {
+    const job = await chatJob(9003, "test message");
+    const deps = dependencies({
+      deepSeekContent: "（背景：海边）今天心情不错（微笑）*点头*。",
+    });
+    await processQueueMessage(job, env, deps.value);
+    const processed = new Set<number>();
+    while (true) {
+      const bubble = deps.queued
+        .map((entry) => entry.job)
+        .find(
+          (queuedJob): queuedJob is Extract<QueueJob, { type: "bubble" }> =>
+            queuedJob.type === "bubble" && !processed.has(queuedJob.deliveryId),
+        );
+      if (bubble === undefined) break;
+      processed.add(bubble.deliveryId);
+      await processQueueMessage(bubble, env, deps.value);
+    }
+    const sentTexts = deps.telegramBodies
+      .filter((body) => typeof body.text === "string")
+      .map((body) => String(body.text));
+    expect(sentTexts.length).toBeGreaterThan(0);
+    expect(sentTexts.every((text) => !text.includes("（") && !text.includes("*"))).toBe(
+      true,
+    );
+    expect(sentTexts[0]).toContain("今天心情不错");
+  });
+
   it("refreshes typing and classifies Telegram 429 as retryable", async () => {
     const job = await chatJob();
     const deps = dependencies();

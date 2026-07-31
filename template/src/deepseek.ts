@@ -360,7 +360,7 @@ export async function requestMemoryUpdate(
       {
         role: "system",
         content:
-          "仅从用户明确说出的内容更新摘要和记忆，不得从助手回复推断。输出 JSON：summary、through_message_id、stable_facts、episodes。stable_facts 只放长期稳定事实，每项包含 category、fact_key、fact_value、confidence、source_message_id；短期情绪、一次性事件和阶段状态必须放 episodes，每项包含 category、content、people、topics、occurred_at、source_message_id，不得把短期情绪提升为稳定事实。",
+          "仅从用户明确说出的内容更新摘要和记忆，不得从助手回复推断。输出 JSON：summary、through_message_id、stable_facts、episodes。stable_facts 只放长期稳定事实，每项包含 category、fact_key、fact_value、confidence、source_message_id；短期情绪、一次性事件和阶段状态必须放 episodes，每项包含 category、content、people、topics、occurred_at、source_message_id，不得把短期情绪提升为稳定事实。摘要和记忆只记录实质内容，不要记录括号旁白、动作描写或舞台说明。",
       },
       {
         role: "user",

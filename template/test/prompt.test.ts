@@ -6,6 +6,7 @@ const hasImported = IMPORTED_PERSONA_PROMPT.trim().length > 0;
 import {
   buildAskPrompt,
   buildPersonaPrompt,
+  cleanStageDirections,
   type PromptMemoryFact,
 } from "../src/prompt";
 
@@ -54,6 +55,7 @@ describe("Persona Bot prompt construction", () => {
       ...(hasImported ? ["[IMPORTED_PERSONA_REFERENCE_DATA]"] : []),
       "[RELEVANT_OWNER_MEMORY]",
       "[CONVERSATION_SUMMARY]",
+      "[OUTPUT_FORMAT]",
     ];
     const indexes = markers.map((marker) =>
       contents.findIndex((content) => content.startsWith(marker)),
@@ -154,8 +156,31 @@ describe("Persona Bot prompt construction", () => {
     });
 
     expect(result.totalChars).toBeGreaterThan(10);
-    expect(result.messages).toHaveLength(hasImported ? 10 : 9);
+    expect(result.messages).toHaveLength(hasImported ? 11 : 10);
     expect(result.messages.at(-1)?.content).toBe("必须保留的当前消息");
+  });
+
+  it("cleans stage directions from replayed history and includes the output-format layer", () => {
+    const result = buildPersonaPrompt({
+      persona: PERSONA_V1,
+      memoryFacts: [],
+      summary: "（背景：客厅）上次聊到学习压力。",
+      recentMessages: [
+        { role: "user", content: "今天怎么样？" },
+        { role: "assistant", content: "（笑着）还不错呀，你呢？" },
+      ],
+      currentMessage: "我也还行",
+      currentBeijingTime: "2025-06-15 23:06:50（北京时间，UTC+8）",
+      maxContextChars: 100_000,
+    });
+    const joined = result.messages.map((item) => item.content).join("\n");
+    expect(joined).toContain("[OUTPUT_FORMAT]");
+    expect(joined).not.toContain("（笑着）还不错呀");
+    expect(joined).not.toContain("（背景：客厅）");
+    expect(joined).toContain("还不错呀，你呢？");
+    expect(cleanStageDirections("（背景：海边）今天心情不错（微笑）*点头*。")).toBe(
+      "今天心情不错。",
+    );
   });
 });
 

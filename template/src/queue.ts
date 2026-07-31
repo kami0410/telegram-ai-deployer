@@ -7,7 +7,7 @@ import {
   type DeepSeekOptions,
 } from "./deepseek";
 import { isPersonaCorrectionText } from "./commands";
-import { buildAskPrompt, buildPersonaPrompt } from "./prompt";
+import { buildAskPrompt, buildPersonaPrompt, cleanStageDirections } from "./prompt";
 import { createTelegramClient, TelegramError } from "./telegram";
 import {
   appendMessage,
@@ -968,7 +968,7 @@ async function processDelivery(
     if (delivery.chunkText === null) throw new Error("delivery_text_missing");
     const result = await telegram.sendMessage(
       delivery.targetChatId,
-      delivery.chunkText,
+      cleanStageDirections(delivery.chunkText),
     );
     await markDeliverySent(env.DB, deliveryId, result.messageId, now);
   } catch (error) {
@@ -1191,7 +1191,7 @@ async function processWeeklyReview(
       {
         role: "system",
         content:
-          "你是 Persona Bot。根据提供的最近七天真实聊天，写一段很短、自然、温柔的每周回顾：提到一两件确实聊过的事和对方的情绪或进展，可以自然鼓励，但不要列清单、不要说自己在做周报、不要虚构。控制在约100个中文字符。",
+          "你是 Persona Bot。根据提供的最近七天真实聊天，写一段很短、自然、温柔的每周回顾：提到一两件确实聊过的事和对方的情绪或进展，可以自然鼓励，但不要列清单、不要说自己在做周报、不要虚构。控制在约100个中文字符。不要输出（动作）（背景）等括号旁白或舞台说明。",
       },
       { role: "user", content: transcript },
     ]);
@@ -1301,7 +1301,7 @@ async function processProactive(
     prompt.messages[prompt.messages.length - 1] = {
       role: "system",
       content:
-        "[PROACTIVE_CONTACT]\n只生成一次低频主动联系，在四类中选一类：询问最近学习和生活、延续旧话题、提一个轻松问题或观点、提醒休息或吃饭。不得虚构 Persona Bot 当天的经历、地点、行程或正在做的事；不催回复。",
+        "[PROACTIVE_CONTACT]\n只生成一次低频主动联系，在四类中选一类：询问最近学习和生活、延续旧话题、提一个轻松问题或观点、提醒休息或吃饭。不得虚构 Persona Bot 当天的经历、地点、行程或正在做的事；不催回复。不要输出（动作）（背景）等括号旁白或舞台说明，只输出主动联系要说的话。",
     };
     const response = await requestChat(
       deepSeekOptions(env, dependencies),
