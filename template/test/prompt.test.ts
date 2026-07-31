@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { PERSONA_V1 } from "../src/persona/seed";
+import { IMPORTED_PERSONA_PROMPT } from "../src/persona/imported-prompt";
+
+const hasImported = IMPORTED_PERSONA_PROMPT.trim().length > 0;
 import {
   buildAskPrompt,
   buildPersonaPrompt,
@@ -39,7 +42,7 @@ describe("Persona Bot prompt construction", () => {
     });
 
     const contents = result.messages.map((message) => message.content);
-    const indexes = [
+    const markers = [
       "[SAFETY_AND_REALITY]",
       "[PERSONA]",
       "[NON_OVERRIDABLE_BOUNDARIES]",
@@ -48,12 +51,14 @@ describe("Persona Bot prompt construction", () => {
       "[CURRENT_BEIJING_TIME]",
       "[RESPONSE_LENGTH]",
       "[HUMANIZER_STYLE]",
+      ...(hasImported ? ["[IMPORTED_PERSONA_REFERENCE_DATA]"] : []),
       "[RELEVANT_OWNER_MEMORY]",
       "[CONVERSATION_SUMMARY]",
-    ].map((marker) =>
+    ];
+    const indexes = markers.map((marker) =>
       contents.findIndex((content) => content.startsWith(marker)),
     );
-    expect(indexes).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(indexes).toEqual(markers.map((_, index) => index));
     expect(result.messages.at(-1)).toEqual({
       role: "user",
       content: "我今天还是有点焦虑",
@@ -85,19 +90,16 @@ describe("Persona Bot prompt construction", () => {
   });
 
   it("drops oldest recent messages, then summary detail, then low-priority facts", () => {
-    const generous = buildPersonaPrompt({
+        const baseline = buildPersonaPrompt({
       persona: PERSONA_V1,
-      memoryFacts: facts,
-      summary: "S".repeat(1_000),
-      recentMessages: [
-        { role: "user", content: `old-${"x".repeat(500)}` },
-        { role: "assistant", content: `new-${"y".repeat(500)}` },
-      ],
+      memoryFacts: [],
+      summary: null,
+      recentMessages: [],
       currentMessage: "current",
-      currentBeijingTime: "2025-06-15 23:06:50（北京时间，UTC+8）",
+      currentBeijingTime: "'@ + $time + @'",
       maxContextChars: 100_000,
     });
-    const hardSize = generous.hardLayerChars;
+    const fixedChars = baseline.totalChars;
 
     const withoutOldest = buildPersonaPrompt({
       persona: PERSONA_V1,
@@ -109,7 +111,7 @@ describe("Persona Bot prompt construction", () => {
       ],
       currentMessage: "current",
       currentBeijingTime: "2025-06-15 23:06:50（北京时间，UTC+8）",
-      maxContextChars: hardSize + 1_850,
+      maxContextChars: fixedChars + 1_850,
     });
     expect(withoutOldest.messages.some((item) => item.content.startsWith("old-"))).toBe(
       false,
@@ -128,7 +130,7 @@ describe("Persona Bot prompt construction", () => {
       ],
       currentMessage: "current",
       currentBeijingTime: "2025-06-15 23:06:50（北京时间，UTC+8）",
-      maxContextChars: hardSize + 250,
+      maxContextChars: fixedChars + 250,
     });
     const joined = pressured.messages.map((item) => item.content).join("\n");
     expect(joined).not.toContain("old-");
@@ -152,7 +154,7 @@ describe("Persona Bot prompt construction", () => {
     });
 
     expect(result.totalChars).toBeGreaterThan(10);
-    expect(result.messages).toHaveLength(9);
+    expect(result.messages).toHaveLength(hasImported ? 10 : 9);
     expect(result.messages.at(-1)?.content).toBe("必须保留的当前消息");
   });
 });
