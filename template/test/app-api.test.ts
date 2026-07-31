@@ -109,6 +109,22 @@ describe("management API", () => {
     ).bind(memory.id).first()).toEqual({ operation: "delete", status: "pending" });
   });
 
+  it("lists and deletes an episode from the management API", async () => {
+    const owner = await env.DB.prepare("SELECT id FROM owners").first<{ id: number }>();
+    if (owner === null) throw new Error("owner_missing");
+    const episode = await env.DB.prepare(
+      `INSERT INTO memory_episodes (owner_id, category, content, people_json, topics_json, occurred_at, auto_inject_until, created_at, updated_at)
+       VALUES (?, 'study', '考试前有些焦虑', '["OWNER"]', '["考试"]', ?, ?, ?, ?) RETURNING id`,
+    ).bind(owner.id, NOW, NOW + 30 * 86_400, NOW, NOW).first<{ id: number }>();
+    if (episode === null) throw new Error("episode_fixture_missing");
+    const listed = await appFetch("/api/app/episodes?category=study");
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({ items: [{ id: episode.id, content: "考试前有些焦虑" }] });
+    const deleted = await appFetch(`/api/app/episodes/${episode.id}`, { method: "DELETE", body: JSON.stringify({ expectedUpdatedAt: NOW }) });
+    expect(deleted.status).toBe(200);
+    expect(await env.DB.prepare("SELECT operation FROM memory_vector_jobs WHERE entity_kind = 'episode' AND entity_id = ?").bind(episode.id).first()).toEqual({ operation: "delete" });
+  });
+
   it("loads and manually edits a pending memory conflict", async () => {
     const owner = await env.DB.prepare("SELECT id FROM owners").first<{ id: number }>();
     if (owner === null) throw new Error("owner_missing");

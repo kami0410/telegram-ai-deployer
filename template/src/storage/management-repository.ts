@@ -24,6 +24,16 @@ export interface MemoryListOptions {
   limit?: number;
 }
 
+export interface ManagedEpisode {
+  id: number;
+  category: string;
+  content: string;
+  people: string[];
+  topics: string[];
+  occurredAt: number;
+  updatedAt: number;
+}
+
 export interface ManagementOverview {
   currentPersonaVersion: number | null;
   personaUpdatedAt: number | null;
@@ -61,12 +71,29 @@ interface MemoryRow {
   updated_at: number;
 }
 
+interface EpisodeRow {
+  id: number;
+  category: string;
+  content: string;
+  people_json: string;
+  topics_json: string;
+  occurred_at: number;
+  updated_at: number;
+}
+
 function isMemoryConfidence(value: string): value is MemoryConfidence {
   return value === "low" || value === "medium" || value === "high";
 }
 
 function isCategory(value: string): boolean {
   return MEMORY_CATEGORIES.some((category) => category === value);
+}
+
+function stringArray(value: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string") ? parsed : [];
+  } catch { return []; }
 }
 
 function encodeCursor(updatedAt: number, id: number): string {
@@ -142,6 +169,29 @@ export async function listMemories(
       ? encodeCursor(last.updated_at, last.id)
       : null,
   };
+}
+
+export async function listEpisodes(
+  db: D1Database,
+  ownerId: number,
+  category?: string,
+): Promise<{ items: ManagedEpisode[] }> {
+  if (category !== undefined && !isCategory(category)) throw new Error("memory_category_invalid");
+  const result = await db.prepare(
+    `SELECT id, category, content, people_json, topics_json, occurred_at, updated_at
+     FROM memory_episodes
+     WHERE owner_id = ? AND status = 'active'${category === undefined ? "" : " AND category = ?"}
+     ORDER BY occurred_at DESC, id DESC LIMIT 50`,
+  ).bind(ownerId, ...(category === undefined ? [] : [category])).all<EpisodeRow>();
+  return { items: result.results.map((episode) => ({
+    id: episode.id,
+    category: episode.category,
+    content: episode.content,
+    people: stringArray(episode.people_json),
+    topics: stringArray(episode.topics_json),
+    occurredAt: episode.occurred_at,
+    updatedAt: episode.updated_at,
+  })) };
 }
 
 export async function updateMemory(
@@ -238,6 +288,30 @@ export async function deleteMemory(
   if (!results.every((result) => result.success)) throw new Error("memory_delete_failed");
   if ((results[1]?.meta.changes ?? 0) !== 1) return false;
   return true;
+}
+
+export async function deleteEpisode(
+  db: D1Database,
+  ownerId: number,
+  episodeId: number,
+  expectedUpdatedAt: number,
+  now: number,
+): Promise<boolean> {
+  const results = await db.batch([
+    db.prepare(
+      `INSERT INTO memory_vector_jobs (owner_id, entity_kind, entity_id, operation, status, attempt_count, last_error_code, created_at, updated_at)
+       SELECT ?, 'episode', ?, 'delete', 'pending', 0, NULL, ?, ?
+       WHERE EXISTS (SELECT 1 FROM memory_episodes WHERE id = ? AND owner_id = ? AND updated_at = ? AND status = 'active')
+       ON CONFLICT(owner_id, entity_kind, entity_id) DO UPDATE SET
+         operation = 'delete', status = 'pending', attempt_count = 0, last_error_code = NULL, updated_at = excluded.updated_at`,
+    ).bind(ownerId, episodeId, now, now, episodeId, ownerId, expectedUpdatedAt),
+    db.prepare(
+      `UPDATE memory_episodes SET status = 'deleted', updated_at = ?
+       WHERE id = ? AND owner_id = ? AND updated_at = ? AND status = 'active'`,
+    ).bind(now, episodeId, ownerId, expectedUpdatedAt),
+  ]);
+  if (!results.every((result) => result.success)) throw new Error("episode_delete_failed");
+  return (results[1]?.meta.changes ?? 0) === 1;
 }
 
 export async function getManagementOverview(

@@ -1,8 +1,10 @@
 import { getOwner } from "./storage/owner-repository";
 import {
   cancelPersonaDraft,
+  deleteEpisode,
   deleteMemory,
   getManagementOverview,
+  listEpisodes,
   listMemories,
   listPersonaDrafts,
   listPersonaVersions,
@@ -145,6 +147,10 @@ async function route(
       limit: Number(url.searchParams.get("limit") ?? "20"),
     }));
   }
+  if (path === "/api/app/episodes" && request.method === "GET") {
+    const category = url.searchParams.get("category");
+    return json(await listEpisodes(env.DB, ownerId, category === null ? undefined : category));
+  }
   const memoryMatch = path.match(/^\/api\/app\/memories\/(\d+)$/u);
   if (memoryMatch !== null && request.method === "PATCH") {
     const memoryId = asSafeId(memoryMatch[1] ?? "");
@@ -177,6 +183,15 @@ async function route(
       now,
     );
     await audit(env.DB, ownerId, "delete", "memory", String(memoryId), deleted ? "ok" : "conflict", now);
+    return deleted ? json({ ok: true }) : json({ error: "version_conflict" }, 409);
+  }
+  const episodeMatch = path.match(/^\/api\/app\/episodes\/(\d+)$/u);
+  if (episodeMatch !== null && request.method === "DELETE") {
+    const episodeId = asSafeId(episodeMatch[1] ?? "");
+    const body = await readJson(request);
+    if (!Number.isSafeInteger(body.expectedUpdatedAt)) throw new HttpError(400, "invalid_episode");
+    const deleted = await deleteEpisode(env.DB, ownerId, episodeId, body.expectedUpdatedAt as number, now);
+    await audit(env.DB, ownerId, "delete", "episode", String(episodeId), deleted ? "ok" : "conflict", now);
     return deleted ? json({ ok: true }) : json({ error: "version_conflict" }, 409);
   }
   const conflictMatch = path.match(/^\/api\/app\/memory-conflicts\/([0-9a-f-]{36})$/u);

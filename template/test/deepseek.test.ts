@@ -244,7 +244,7 @@ describe("DeepSeek memory extraction", () => {
         },
       ],
     },
-  ])("rejects ungrounded memory JSON", async (memory) => {
+  ])("accepts nonstandard memory JSON without blocking the summary", async (memory) => {
     const fetcher = vi.fn<typeof fetch>(async () =>
       jsonResponse({
         choices: [{ message: { content: JSON.stringify(memory) } }],
@@ -259,7 +259,30 @@ describe("DeepSeek memory extraction", () => {
           { id: 12, role: "user", content: "source" },
         ],
       }),
-    ).rejects.toMatchObject({ code: "invalid_memory_json" });
+    ).resolves.toMatchObject({ summary: "x", throughMessageId: 12 });
+  });
+
+  it("normalizes nonstandard valid memory JSON", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        choices: [{ message: { content: JSON.stringify({
+          summary: 42,
+          through_message_id: 999,
+          stable_facts: [{ category: "other", fact_key: "考试计划", fact_value: "正在准备考试", confidence: "certain", source_message_id: 999 }],
+          episodes: "none",
+        }) } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
+    await expect(requestMemoryUpdate(options(fetcher), {
+      previousSummary: null,
+      sourceMessages: [{ id: 12, role: "user", content: "source" }],
+    })).resolves.toMatchObject({
+      summary: "42",
+      throughMessageId: 12,
+      stableFacts: [{ category: "interest", factKey: "memory_12_1", factValue: "正在准备考试", confidence: "medium", sourceMessageId: 12 }],
+      episodes: [],
+    });
   });
 });
 

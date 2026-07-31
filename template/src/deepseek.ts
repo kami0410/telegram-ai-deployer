@@ -269,13 +269,48 @@ export interface MemoryUpdateInput {
   sourceMessages: MemorySourceMessage[];
 }
 
+function extractJsonObject(content: string): string {
+  const trimmed = content.trim();
+  const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/iu.exec(trimmed)?.[1];
+  if (fenced) return fenced;
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  return firstBrace >= 0 && lastBrace > firstBrace ? trimmed.slice(firstBrace, lastBrace + 1) : trimmed;
+}
+
+function normalizeCategory(value: unknown): MemoryCategory {
+  return isMemoryCategory(value) ? value : "interest";
+}
+
+function normalizeConfidence(value: unknown): MemoryConfidence {
+  return value === "low" || value === "medium" || value === "high" ? value : "medium";
+}
+
+function normalizeFactKey(value: unknown, sourceMessageId: number, index: number): string {
+  const normalized = typeof value === "string"
+    ? value.toLowerCase().replace(/[^a-z0-9_:-]+/g, "_").replace(/^[_:-]+|[_:-]+$/g, "")
+    : "";
+  return /^[a-z][a-z0-9_:-]{0,99}$/.test(normalized) ? normalized : `memory_${sourceMessageId}_${index + 1}`;
+}
+
+function normalizeText(value: unknown, maximumLength: number): string {
+  if (typeof value === "string") return value.trim().slice(0, maximumLength);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
+function normalizeLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean).slice(0, 10).map((entry) => entry.slice(0, 100));
+}
+
 function parseMemoryUpdate(
   content: string,
   sourceMessages: MemorySourceMessage[],
 ): Omit<MemoryUpdateResult, "usage"> {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    parsed = JSON.parse(extractJsonObject(content));
   } catch {
     throw new DeepSeekError("invalid_memory_json", 200, false);
   }
@@ -283,93 +318,30 @@ function parseMemoryUpdate(
     throw new DeepSeekError("invalid_memory_json", 200, false);
   }
   const summary = parsed.summary;
-  const throughMessageId = parsed.through_message_id;
-  const facts = parsed.stable_facts;
-  const episodes = parsed.episodes;
-  const userSourceIds = new Set(
-    sourceMessages.filter((message) => message.role === "user").map((message) => message.id),
-  );
   const lastMessageId = sourceMessages.at(-1)?.id;
-  if (
-    typeof summary !== "string" ||
-    summary.length > 8_000 ||
-    !isNonNegativeInteger(throughMessageId) ||
-    throughMessageId !== lastMessageId ||
-    !Array.isArray(facts) ||
-    !Array.isArray(episodes) ||
-    facts.length + episodes.length > 50
-  ) {
+  const lastUserMessageId = sourceMessages.filter((message) => message.role === "user").at(-1)?.id;
+  if (lastMessageId === undefined) {
     throw new DeepSeekError("invalid_memory_json", 200, false);
   }
 
-  const normalizedFacts: ExtractedMemoryFact[] = facts.map((fact) => {
-    if (!isRecord(fact)) {
-      throw new DeepSeekError("invalid_memory_json", 200, false);
-    }
-    const category = fact.category;
-    const factKey = fact.fact_key;
-    const factValue = fact.fact_value;
-    const confidence = fact.confidence;
-    const sourceMessageId = fact.source_message_id;
-    if (
-      !isMemoryCategory(category) ||
-      typeof factKey !== "string" ||
-      !/^[a-z0-9_:-]{1,100}$/.test(factKey) ||
-      typeof factValue !== "string" ||
-      factValue.length === 0 ||
-      factValue.length > 1_000 ||
-      (confidence !== "low" &&
-        confidence !== "medium" &&
-        confidence !== "high") ||
-      !isNonNegativeInteger(sourceMessageId) ||
-      !userSourceIds.has(sourceMessageId)
-    ) {
-      throw new DeepSeekError("invalid_memory_json", 200, false);
-    }
-    return {
-      category,
-      factKey,
-      factValue,
-      confidence,
-      sourceMessageId,
-    };
+  const facts = Array.isArray(parsed.stable_facts) ? parsed.stable_facts : [];
+  const episodes = Array.isArray(parsed.episodes) ? parsed.episodes : [];
+  const normalizedFacts: ExtractedMemoryFact[] = lastUserMessageId === undefined ? [] : facts.slice(0, 50).flatMap((fact, index) => {
+    if (!isRecord(fact)) return [];
+    const factValue = normalizeText(fact.fact_value ?? fact.value ?? fact.content, 1_000);
+    if (factValue.length === 0) return [];
+    return [{ category: normalizeCategory(fact.category), factKey: normalizeFactKey(fact.fact_key ?? fact.key, lastUserMessageId, index), factValue, confidence: normalizeConfidence(fact.confidence), sourceMessageId: lastUserMessageId }];
   });
-
-  const normalizedEpisodes: ExtractedMemoryEpisode[] = episodes.map((episode) => {
-    if (!isRecord(episode)) {
-      throw new DeepSeekError("invalid_memory_json", 200, false);
-    }
-    const category = episode.category;
-    const content = episode.content;
-    const people = episode.people;
-    const topics = episode.topics;
-    const occurredAt = episode.occurred_at;
-    const sourceMessageId = episode.source_message_id;
-    const validLabels = (value: unknown): value is string[] =>
-      Array.isArray(value) && value.length <= 10 &&
-      value.every((entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 100);
-    if (
-      !isMemoryCategory(category) ||
-      typeof content !== "string" || content.length === 0 || content.length > 1_000 ||
-      !validLabels(people) || !validLabels(topics) ||
-      !isNonNegativeInteger(occurredAt) ||
-      !isNonNegativeInteger(sourceMessageId) || !userSourceIds.has(sourceMessageId)
-    ) {
-      throw new DeepSeekError("invalid_memory_json", 200, false);
-    }
-    return {
-      category,
-      content,
-      people,
-      topics,
-      occurredAt,
-      sourceMessageId,
-    };
+  const normalizedEpisodes: ExtractedMemoryEpisode[] = lastUserMessageId === undefined ? [] : episodes.slice(0, Math.max(0, 50 - normalizedFacts.length)).flatMap((episode) => {
+    if (!isRecord(episode)) return [];
+    const episodeContent = normalizeText(episode.content ?? episode.summary, 1_000);
+    if (episodeContent.length === 0) return [];
+    return [{ category: normalizeCategory(episode.category), content: episodeContent, people: normalizeLabels(episode.people), topics: normalizeLabels(episode.topics), occurredAt: isNonNegativeInteger(episode.occurred_at) ? episode.occurred_at : Math.floor(Date.now() / 1_000), sourceMessageId: lastUserMessageId }];
   });
 
   return {
-    summary,
-    throughMessageId,
+    summary: normalizeText(summary, 8_000),
+    throughMessageId: lastMessageId,
     stableFacts: normalizedFacts,
     episodes: normalizedEpisodes,
   };

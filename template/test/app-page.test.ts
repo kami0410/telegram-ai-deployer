@@ -12,6 +12,7 @@ describe("management Mini App page", () => {
     expect(html).toContain("Persona Bot 管理面板");
     expect(html).toContain('data-view="overview"');
     expect(html).toContain('data-view="memories"');
+    expect(html).toContain('data-view="episodes"');
     expect(html).toContain('data-view="persona"');
     expect(html).toContain('data-view="drafts"');
     expect(html).not.toContain("localStorage");
@@ -26,6 +27,7 @@ describe("management Mini App page", () => {
     expect(script).toContain("telegram-init-data");
     expect(script).toContain("memory-conflict=");
     expect(script).toContain("/api/app/memory-conflicts/");
+    expect(script).toContain("/api/app/episodes");
     expect(script).not.toContain("localStorage");
   });
 });
