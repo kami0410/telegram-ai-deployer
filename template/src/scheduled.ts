@@ -196,6 +196,37 @@ function queueSender(env: Env, dependencies: ScheduledDependencies): QueueSender
   };
 }
 
+async function scheduleOverdueMemoryUpdates(
+  env: Env,
+  dependencies: ScheduledDependencies,
+  ownerId: number,
+): Promise<void> {
+  const threshold = Math.max(1, Number(env.MEMORY_UPDATE_INTERVAL) || 8) * 2;
+  const conversations = await env.DB.prepare(
+    `SELECT c.id
+     FROM conversations c
+     WHERE c.owner_id = ? AND c.status = 'active'
+       AND (
+         SELECT COUNT(*) FROM messages m
+         WHERE m.conversation_id = c.id AND m.mode = 'persona'
+           AND m.id > COALESCE((
+             SELECT MAX(s.through_message_id)
+             FROM conversation_summaries s
+             WHERE s.conversation_id = c.id
+           ), 0)
+       ) >= ?
+     ORDER BY c.id
+     LIMIT 3`,
+  ).bind(ownerId, threshold).all<{ id: number }>();
+  for (const conversation of conversations.results) {
+    await queueSender(env, dependencies).send({
+      type: "memory_update",
+      ownerId,
+      conversationId: conversation.id,
+    });
+  }
+}
+
 export async function handleScheduled(
   env: Env,
   dependencies: ScheduledDependencies = {},
@@ -231,6 +262,7 @@ export async function handleScheduled(
       ownerId: owner.id,
     });
   }
+  await scheduleOverdueMemoryUpdates(env, dependencies, owner.id);
 
   const weekStart = weekStartEpoch(now);
   const weekEnd = weekStart + WEEK_SECONDS;

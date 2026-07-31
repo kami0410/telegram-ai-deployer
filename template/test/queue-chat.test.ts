@@ -28,6 +28,7 @@ async function clearAll(): Promise<void> {
     DELETE FROM deliveries;
     DELETE FROM usage_daily;
     DELETE FROM processed_updates;
+    DELETE FROM memory_update_failures;
     DELETE FROM memory_facts;
     DELETE FROM conversation_summaries;
     DELETE FROM messages;
@@ -167,6 +168,62 @@ function dependencies(options: {
 beforeEach(clearAll);
 
 describe("queue chat outbox", () => {
+  it("queues a memory update after sixteen unsummarized persona messages even when total count is odd", async () => {
+    const job = await chatJob(8998, "test message");
+    const source = await env.DB.prepare(
+      "SELECT conversation_id FROM messages WHERE telegram_update_id = 8998",
+    ).first<{ conversation_id: number }>();
+    if (source === null) throw new Error("source_missing");
+    for (let index = 0; index < 14; index += 1) {
+      await appendMessage(env.DB, {
+        ownerId: job.ownerId,
+        conversationId: source.conversation_id,
+        role: index % 2 === 0 ? "assistant" : "user",
+        mode: "persona",
+        content: `historical message ${index}`,
+        createdAt: NOW + 4 + index,
+      });
+    }
+    await env.DB.prepare(
+      "UPDATE conversations SET message_count = 322 WHERE id = ?",
+    ).bind(source.conversation_id).run();
+    const deps = dependencies();
+
+    await processQueueMessage(job, env, deps.value);
+
+    expect(
+      deps.queued.some((entry) => entry.job.type === "memory_update"),
+    ).toBe(true);
+    expect(
+      await env.DB.prepare(
+        "SELECT message_count FROM conversations WHERE id = ?",
+      ).bind(source.conversation_id).first(),
+    ).toEqual({ message_count: 323 });
+  });
+
+  it("records a non-retryable memory extraction failure without storing chat content", async () => {
+    const job = await chatJob(8997, "failure fixture");
+    const source = await env.DB.prepare(
+      "SELECT conversation_id FROM messages WHERE telegram_update_id = 8997",
+    ).first<{ conversation_id: number }>();
+    if (source === null) throw new Error("source_missing");
+    const deps = dependencies({ deepSeekStatus: 400 });
+
+    await expect(processQueueMessage({
+      type: "memory_update",
+      ownerId: job.ownerId,
+      conversationId: source.conversation_id,
+    }, env, deps.value)).resolves.toBeUndefined();
+
+    expect(await env.DB.prepare(
+      `SELECT error_code, failure_count FROM memory_update_failures
+       WHERE owner_id = ? AND conversation_id = ?`,
+    ).bind(job.ownerId, source.conversation_id).first()).toEqual({
+      error_code: "upstream_4xx",
+      failure_count: 1,
+    });
+  });
+
   it("shows inline choices instead of overwriting a conflicting stable fact", async () => {
     const job = await chatJob(8999, "我的目标改变了");
     const source = await env.DB.prepare(

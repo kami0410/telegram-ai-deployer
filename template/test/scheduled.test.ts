@@ -101,6 +101,29 @@ it("queues bounded pending vector synchronization work", async () => {
   expect(deps.jobs).toContainEqual({ type: "memory_vector_sync", ownerId });
 });
 
+it("requeues an overdue persona memory summary from the scheduled recovery pass", async () => {
+  const ownerId = await fixture();
+  const conversation = await getOrCreateActiveConversation(env.DB, ownerId, MONDAY);
+  for (let index = 0; index < 16; index += 1) {
+    await appendMessage(env.DB, {
+      ownerId,
+      conversationId: conversation.conversationId,
+      role: "user",
+      mode: "persona",
+      content: `message-${index}`,
+      telegramUpdateId: 10_000 + index,
+      createdAt: MONDAY + index,
+    });
+  }
+  const deps = dependencies(() => MONDAY + 100);
+  await handleScheduled(env, deps.value);
+  expect(deps.jobs).toContainEqual({
+    type: "memory_update",
+    ownerId,
+    conversationId: conversation.conversationId,
+  });
+});
+
 describe("weekly proactive schedule", () => {
   it("chooses exactly one or two contacts and has no quiet-hour restriction", () => {
     expect(selectWeeklyTarget(source([0]))).toBe(1);

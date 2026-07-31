@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   appendMessage,
   closeActiveConversation,
+  countUnsummarizedMessages,
   getLatestConversationSummary,
   getOrCreateActiveConversation,
   getRecentMessages,
@@ -40,6 +41,54 @@ async function ownerId(): Promise<number> {
 }
 
 describe("durable conversations", () => {
+  it("counts only unsummarized persona messages", async () => {
+    const owner = await ownerId();
+    const conversation = await getOrCreateActiveConversation(env.DB, owner, NOW + 1);
+    const first = await appendMessage(env.DB, {
+      ownerId: owner,
+      conversationId: conversation.conversationId,
+      role: "user",
+      mode: "persona",
+      content: "first message",
+      createdAt: NOW + 2,
+    });
+    const second = await appendMessage(env.DB, {
+      ownerId: owner,
+      conversationId: conversation.conversationId,
+      role: "assistant",
+      mode: "persona",
+      content: "second message",
+      createdAt: NOW + 3,
+    });
+    await saveConversationSummary(env.DB, {
+      conversationId: conversation.conversationId,
+      fromMessageId: first.messageId,
+      throughMessageId: second.messageId,
+      summary: "first two messages",
+      createdAt: NOW + 4,
+    });
+    await appendMessage(env.DB, {
+      ownerId: owner,
+      conversationId: conversation.conversationId,
+      role: "user",
+      mode: "persona",
+      content: "third message",
+      createdAt: NOW + 5,
+    });
+    await appendMessage(env.DB, {
+      ownerId: owner,
+      conversationId: conversation.conversationId,
+      role: "user",
+      mode: "ask",
+      content: "ask message not counted",
+      createdAt: NOW + 6,
+    });
+
+    expect(
+      await countUnsummarizedMessages(env.DB, conversation.conversationId),
+    ).toBe(1);
+  });
+
   it("retains full messages when adding rolling summaries", async () => {
     const owner = await ownerId();
     const conversation = await getOrCreateActiveConversation(env.DB, owner, NOW + 1);

@@ -11,6 +11,7 @@ import { buildAskPrompt, buildPersonaPrompt } from "./prompt";
 import { createTelegramClient, TelegramError } from "./telegram";
 import {
   appendMessage,
+  countUnsummarizedMessages,
   getLatestConversationSummary,
   getOrCreateActiveConversation,
   getRecentMessages,
@@ -29,6 +30,10 @@ import {
 import {
   getRelevantMemoryFacts,
 } from "./storage/memory-repository";
+import {
+  clearMemoryUpdateFailure,
+  recordMemoryUpdateFailure,
+} from "./storage/memory-update-failure-repository";
 import { saveMemoryExtraction } from "./storage/semantic-memory-repository";
 import {
   claimVectorSyncJob,
@@ -659,16 +664,13 @@ async function processReplyGroup(
   });
   await enqueueDeliveries(deliveries, queue, now);
 
-  const conversation = await env.DB
-    .prepare("SELECT message_count FROM conversations WHERE id = ?")
-    .bind(conversationId)
-    .first<{ message_count: number }>();
+  const unsummarizedMessages = mode === "persona"
+    ? await countUnsummarizedMessages(env.DB, conversationId)
+    : 0;
   if (
     mode === "persona" &&
-    conversation !== null &&
-    conversation.message_count %
-      (Math.max(1, Number(env.MEMORY_UPDATE_INTERVAL)) * 2) ===
-      0
+    unsummarizedMessages >=
+      Math.max(1, Number(env.MEMORY_UPDATE_INTERVAL)) * 2
   ) {
     await queue.send({ type: "memory_update", ownerId, conversationId });
   }
@@ -991,6 +993,7 @@ async function processMemoryUpdate(
   dependencies: QueueDependencies,
 ): Promise<void> {
   const now = dependencies.now?.() ?? Math.floor(Date.now() / 1_000);
+  try {
   const [latest, messages] = await Promise.all([
     getLatestConversationSummary(env.DB, job.conversationId),
     getRecentMessages(env.DB, job.conversationId, 40),
@@ -1064,6 +1067,19 @@ async function processMemoryUpdate(
     result.usage.inputTokens,
     result.usage.outputTokens,
   );
+    await clearMemoryUpdateFailure(env.DB, job.ownerId, job.conversationId);
+  } catch (error) {
+    if (error instanceof DeepSeekError && !error.retryable) {
+      await recordMemoryUpdateFailure(env.DB, {
+        ownerId: job.ownerId,
+        conversationId: job.conversationId,
+        errorCode: error.code,
+        now,
+      });
+      return;
+    }
+    throw error;
+  }
 }
 
 async function processMemoryVectorSync(

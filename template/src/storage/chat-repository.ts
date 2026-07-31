@@ -277,6 +277,27 @@ export async function getLatestConversationSummary(
   return row === null ? null : toSummary(row);
 }
 
+export async function countUnsummarizedMessages(
+  db: D1Database,
+  conversationId: number,
+): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM messages
+       WHERE conversation_id = ?
+         AND mode = 'persona'
+         AND id > COALESCE((
+           SELECT MAX(through_message_id)
+           FROM conversation_summaries
+           WHERE conversation_id = ?
+         ), 0)`,
+    )
+    .bind(conversationId, conversationId)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
 export async function closeActiveConversation(
   db: D1Database,
   ownerId: number,
