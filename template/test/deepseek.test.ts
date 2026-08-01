@@ -26,6 +26,24 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
 }
 
 describe("DeepSeek chat client", () => {
+  it("retries one malformed successful response before returning the answer", async () => {
+    let attempts = 0;
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      attempts += 1;
+      return attempts === 1
+        ? new Response("not-json")
+        : jsonResponse({
+            choices: [{ message: { content: "这次有回复了" } }],
+            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+          });
+    });
+
+    await expect(requestChat(options(fetcher), [
+      { role: "user", content: "hello" },
+    ])).resolves.toMatchObject({ content: "这次有回复了" });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("uses V4 Flash with thinking disabled and returns bounded usage", async () => {
     const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
       expect(init?.method).toBe("POST");
@@ -92,7 +110,7 @@ describe("DeepSeek chat client", () => {
       "response_too_large",
     ],
   ])("rejects %s safely", async (_name, response, code) => {
-    const fetcher = vi.fn<typeof fetch>(async () => response);
+    const fetcher = vi.fn<typeof fetch>(async () => response.clone());
     await expect(
       requestChat(options(fetcher), [{ role: "user", content: "hello" }]),
     ).rejects.toMatchObject({ code });
@@ -280,8 +298,40 @@ describe("DeepSeek memory extraction", () => {
     })).resolves.toMatchObject({
       summary: "42",
       throughMessageId: 12,
-      stableFacts: [{ category: "interest", factKey: "memory_12_1", factValue: "正在准备考试", confidence: "medium", sourceMessageId: 12 }],
+      stableFacts: [],
       episodes: [],
+    });
+  });
+
+  it("recovers an invalid source id only when the fact is grounded in a user message", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        choices: [{ message: { content: JSON.stringify({
+          summary: "准备考试",
+          through_message_id: 12,
+          stable_facts: [{
+            category: "study",
+            fact_key: "exam_plan",
+            fact_value: "正在准备考试",
+            confidence: "high",
+            source_message_id: 999,
+            evidence: "正在准备考试",
+          }],
+          episodes: [],
+        }) } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
+
+    await expect(requestMemoryUpdate(options(fetcher), {
+      previousSummary: null,
+      sourceMessages: [
+        { id: 10, role: "user", content: "我最近正在准备考试" },
+        { id: 11, role: "assistant", content: "加油呀" },
+        { id: 12, role: "user", content: "还有点紧张" },
+      ],
+    })).resolves.toMatchObject({
+      stableFacts: [{ factKey: "exam_plan", sourceMessageId: 10 }],
     });
   });
 });

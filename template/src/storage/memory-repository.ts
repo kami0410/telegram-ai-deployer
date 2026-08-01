@@ -128,19 +128,27 @@ export async function getRelevantMemoryFacts(
     .all<MemoryFactRow>();
   const safeLimit = Math.max(0, Math.min(50, Math.floor(limit)));
   const ranked = result.results
-    .map((row) => ({
-      id: row.id,
-      factKey: row.fact_key,
-      factValue: row.fact_value,
-      category: row.category,
-      confidence: row.confidence,
-      priorityScore:
-        confidenceScore(row.confidence) +
-        topicScore(query, row) +
-        recencyScore(row.updated_at, now) +
-        (row.last_used_at === null ? 0 : 5),
-      updatedAt: row.updated_at,
-    }))
+    .map((row) => {
+      const topic = topicScore(query, row);
+      return {
+        id: row.id,
+        factKey: row.fact_key,
+        factValue: row.fact_value,
+        category: row.category,
+        confidence: row.confidence,
+        topic,
+        priorityScore:
+          confidenceScore(row.confidence) +
+          topic +
+          recencyScore(row.updated_at, now) +
+          (row.last_used_at === null ? 0 : 5),
+        updatedAt: row.updated_at,
+      };
+    })
+    .filter((fact) =>
+      fact.topic > 0 ||
+      (fact.confidence === "high" && (fact.category === "identity" || fact.category === "relationship"))
+    )
     .sort(
       (left, right) =>
         right.priorityScore - left.priorityScore ||
@@ -161,5 +169,5 @@ export async function getRelevantMemoryFacts(
     }
   }
 
-  return ranked.map(({ id: _id, updatedAt: _updatedAt, ...fact }) => fact);
+  return ranked.map(({ id: _id, updatedAt: _updatedAt, topic: _topic, ...fact }) => fact);
 }

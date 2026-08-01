@@ -186,7 +186,7 @@ describe("grounded long-term facts", () => {
       factKey: "favorite_fruit",
       confidence: "high",
     });
-    expect(fruit[0]?.priorityScore).toBeGreaterThan(fruit[1]?.priorityScore ?? 0);
+    expect(fruit).toHaveLength(1);
 
     await upsertMemoryFacts(env.DB, owner, conversation.conversationId, [
       {
@@ -199,7 +199,7 @@ describe("grounded long-term facts", () => {
     ], NOW + 6);
     expect(
       (
-        await getRelevantMemoryFacts(env.DB, owner, "水果", 1, NOW + 7)
+        await getRelevantMemoryFacts(env.DB, owner, "草莓", 1, NOW + 7)
       )[0]?.factValue,
     ).toBe("OWNER 现在更喜欢吃草莓");
   });

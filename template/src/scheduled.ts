@@ -316,7 +316,7 @@ export async function handleScheduled(
       `SELECT COUNT(*) AS count
        FROM processed_updates
        WHERE owner_id = ?
-         AND status IN ('received', 'queued', 'processing', 'failed')`,
+         AND status IN ('received', 'queued', 'processing')`,
     )
     .bind(owner.id)
     .first<{ count: number }>();

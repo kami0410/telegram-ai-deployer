@@ -191,6 +191,30 @@ describe("weekly proactive schedule", () => {
     ).toEqual({ next_proactive_at: null });
   });
 
+  it("does not let historical failed updates block a due proactive contact", async () => {
+    const ownerId = await fixture();
+    await env.DB
+      .prepare(
+        `INSERT INTO persona_runtime_state (
+           owner_id, next_proactive_at, week_start, weekly_target,
+           weekly_sent, updated_at
+         ) VALUES (?, ?, '2026-07-20', 1, 0, ?)`,
+      )
+      .bind(ownerId, MONDAY, MONDAY)
+      .run();
+    await claimUpdate(env.DB, 9100, ownerId, MONDAY - 86_400);
+    await markUpdate(env.DB, 9100, "failed", MONDAY - 86_399, "invalid_response");
+    const deps = dependencies(() => MONDAY, source([0]));
+
+    await handleScheduled(env, deps.value);
+
+    expect(deps.jobs).toContainEqual({
+      type: "proactive",
+      ownerId,
+      scheduledAt: MONDAY,
+    });
+  });
+
   it("permits a second contact after OWNER replied and suppresses pending messages", async () => {
     const ownerId = await fixture();
     const due = MONDAY + 48 * 3_600;

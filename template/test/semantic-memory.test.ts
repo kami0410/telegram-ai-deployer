@@ -112,6 +112,10 @@ it("returns an old episode only for an explicit history query and degrades safel
   await expect(getSemanticRelevantMemories(env.DB, ai, index, source.ownerId, "上次考试焦虑", later, true)).resolves.toMatchObject([
     { factKey: `episode:${id}`, category: "study" },
   ]);
+  await expect(getSemanticRelevantMemories(env.DB, ai, {
+    ...index,
+    query: async () => ({ matches: [{ id: `episode:${id}`, score: 0.2 }] }),
+  }, source.ownerId, "上次考试焦虑", later, true)).resolves.toEqual([]);
   await expect(getSemanticRelevantMemories(
     env.DB,
     { run: async () => { throw new Error("ai_down"); } },

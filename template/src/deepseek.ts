@@ -205,11 +205,26 @@ async function requestCompletion(
   };
 }
 
+async function requestCompletionWithInvalidResponseRetry(
+  options: DeepSeekOptions,
+  messages: ChatCompletionMessage[],
+  responseFormat?: { type: "json_object" },
+): Promise<DeepSeekChatResult> {
+  try {
+    return await requestCompletion(options, messages, responseFormat);
+  } catch (error) {
+    if (!(error instanceof DeepSeekError) || error.code !== "invalid_response") {
+      throw error;
+    }
+    return requestCompletion(options, messages, responseFormat);
+  }
+}
+
 export function requestChat(
   options: DeepSeekOptions,
   messages: ChatCompletionMessage[],
 ): Promise<DeepSeekChatResult> {
-  return requestCompletion(options, messages);
+  return requestCompletionWithInvalidResponseRetry(options, messages);
 }
 
 export const MEMORY_CATEGORIES = [
@@ -304,6 +319,29 @@ function normalizeLabels(value: unknown): string[] {
   return value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean).slice(0, 10).map((entry) => entry.slice(0, 100));
 }
 
+function resolveUserSourceMessageId(
+  sourceMessages: MemorySourceMessage[],
+  claimedSourceId: unknown,
+  evidence: unknown,
+  extractedText: string,
+): number | null {
+  const userMessages = sourceMessages.filter((message) => message.role === "user");
+  if (
+    isNonNegativeInteger(claimedSourceId) &&
+    userMessages.some((message) => message.id === claimedSourceId)
+  ) {
+    return claimedSourceId;
+  }
+  const fragments = [normalizeText(evidence, 1_000), extractedText]
+    .map((value) => value.trim())
+    .filter((value, index, values) => value.length >= 2 && values.indexOf(value) === index);
+  for (const fragment of fragments) {
+    const source = userMessages.find((message) => message.content.includes(fragment));
+    if (source !== undefined) return source.id;
+  }
+  return null;
+}
+
 function parseMemoryUpdate(
   content: string,
   sourceMessages: MemorySourceMessage[],
@@ -319,24 +357,27 @@ function parseMemoryUpdate(
   }
   const summary = parsed.summary;
   const lastMessageId = sourceMessages.at(-1)?.id;
-  const lastUserMessageId = sourceMessages.filter((message) => message.role === "user").at(-1)?.id;
   if (lastMessageId === undefined) {
     throw new DeepSeekError("invalid_memory_json", 200, false);
   }
 
   const facts = Array.isArray(parsed.stable_facts) ? parsed.stable_facts : [];
   const episodes = Array.isArray(parsed.episodes) ? parsed.episodes : [];
-  const normalizedFacts: ExtractedMemoryFact[] = lastUserMessageId === undefined ? [] : facts.slice(0, 50).flatMap((fact, index) => {
+  const normalizedFacts: ExtractedMemoryFact[] = facts.slice(0, 50).flatMap((fact, index) => {
     if (!isRecord(fact)) return [];
     const factValue = normalizeText(fact.fact_value ?? fact.value ?? fact.content, 1_000);
     if (factValue.length === 0) return [];
-    return [{ category: normalizeCategory(fact.category), factKey: normalizeFactKey(fact.fact_key ?? fact.key, lastUserMessageId, index), factValue, confidence: normalizeConfidence(fact.confidence), sourceMessageId: lastUserMessageId }];
+    const sourceMessageId = resolveUserSourceMessageId(sourceMessages, fact.source_message_id, fact.evidence, factValue);
+    if (sourceMessageId === null) return [];
+    return [{ category: normalizeCategory(fact.category), factKey: normalizeFactKey(fact.fact_key ?? fact.key, sourceMessageId, index), factValue, confidence: normalizeConfidence(fact.confidence), sourceMessageId }];
   });
-  const normalizedEpisodes: ExtractedMemoryEpisode[] = lastUserMessageId === undefined ? [] : episodes.slice(0, Math.max(0, 50 - normalizedFacts.length)).flatMap((episode) => {
+  const normalizedEpisodes: ExtractedMemoryEpisode[] = episodes.slice(0, Math.max(0, 50 - normalizedFacts.length)).flatMap((episode) => {
     if (!isRecord(episode)) return [];
     const episodeContent = normalizeText(episode.content ?? episode.summary, 1_000);
     if (episodeContent.length === 0) return [];
-    return [{ category: normalizeCategory(episode.category), content: episodeContent, people: normalizeLabels(episode.people), topics: normalizeLabels(episode.topics), occurredAt: isNonNegativeInteger(episode.occurred_at) ? episode.occurred_at : Math.floor(Date.now() / 1_000), sourceMessageId: lastUserMessageId }];
+    const sourceMessageId = resolveUserSourceMessageId(sourceMessages, episode.source_message_id, episode.evidence, episodeContent);
+    if (sourceMessageId === null) return [];
+    return [{ category: normalizeCategory(episode.category), content: episodeContent, people: normalizeLabels(episode.people), topics: normalizeLabels(episode.topics), occurredAt: isNonNegativeInteger(episode.occurred_at) ? episode.occurred_at : Math.floor(Date.now() / 1_000), sourceMessageId }];
   });
 
   return {
@@ -354,13 +395,13 @@ export async function requestMemoryUpdate(
   if (input.sourceMessages.length === 0) {
     throw new DeepSeekError("invalid_memory_json", null, false);
   }
-  const result = await requestCompletion(
+  const result = await requestCompletionWithInvalidResponseRetry(
     options,
     [
       {
         role: "system",
         content:
-          "仅从用户明确说出的内容更新摘要和记忆，不得从助手回复推断。输出 JSON：summary、through_message_id、stable_facts、episodes。stable_facts 只放长期稳定事实，每项包含 category、fact_key、fact_value、confidence、source_message_id；短期情绪、一次性事件和阶段状态必须放 episodes，每项包含 category、content、people、topics、occurred_at、source_message_id，不得把短期情绪提升为稳定事实。摘要和记忆只记录实质内容，不要记录括号旁白、动作描写或舞台说明。",
+          "仅从用户明确说出的内容更新摘要和记忆，不得从助手回复推断。输出 JSON：summary、through_message_id、stable_facts、episodes。stable_facts 只放长期稳定事实，每项包含 category、fact_key、fact_value、confidence、source_message_id、evidence；短期情绪、一次性事件和阶段状态必须放 episodes，每项包含 category、content、people、topics、occurred_at、source_message_id、evidence。evidence 必须逐字复制对应用户消息中的最短充分片段，不得把短期情绪提升为稳定事实。摘要和记忆只记录实质内容，不要记录括号旁白、动作描写或舞台说明。",
       },
       {
         role: "user",
@@ -598,7 +639,7 @@ export async function requestPersonaDraft(
   },
 ): Promise<PersonaDraftProposal> {
   const request = async (strictRetry: boolean): Promise<DeepSeekChatResult> =>
-    requestCompletion(
+    requestCompletionWithInvalidResponseRetry(
       { ...options, thinking: "enabled" },
       [
         {

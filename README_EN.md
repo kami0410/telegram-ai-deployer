@@ -30,6 +30,7 @@ See the [first-use troubleshooting guide](docs/first-use-troubleshooting-zh.md) 
 
 ## Recent template updates
 
+- **v1.0.0 stable**: long-term memories must be grounded in user-authored text; low-relevance memories are no longer injected automatically; malformed model responses are retried with a short fallback; historical failed jobs no longer block proactive contact; queue logs omit chat content; and generated projects include encrypted full-D1 backup and restore tools.
 - **v0.1.7**: generated bots no longer emit parenthetical action/background narration such as “（动作）（背景）（环境）” or asterisk actions; they reply with direct speech only. Template tests now also support non-empty imported personas.
 - **v0.1.6**: memory reliability fixes — overdue memory updates are recovered by the scheduler, memory-extraction failures are persisted, and updates trigger from the unsummarized-message backlog.
 - **Memory hardening**: more tolerant memory JSON parsing and in-app episode memory management.
@@ -49,6 +50,8 @@ See the [first-use troubleshooting guide](docs/first-use-troubleshooting-zh.md) 
 3. Launch the app and follow the wizard: environment check and Cloudflare login → project name and empty directory → the three secrets → read and accept the disclaimer → deploy.
 4. After deployment, complete the Telegram pairing as prompted, then start chatting.
 5. Send `/help` in the chat for all commands, or `/settings` to open the management panel.
+
+After generation, run `npm.cmd run backup` in the bot project directory to create an encrypted full-D1 backup. The generated `BACKUP_ZH.md` documents the restore procedure.
 
 See the [English user guide](docs/user-guide.md) or the [Chinese guide](docs/user-guide-zh.md) for full steps.
 
@@ -85,7 +88,7 @@ By using the tool you confirm that you have read and accepted [DISCLAIMER.md](DI
 
 ## Status and roadmap
 
-- Current status: the Windows application is under active development. Do not use pre-release builds for important or irreplaceable data.
+- Current status: `v1.0.0` stable. The software is still provided without warranty; keep encrypted backups of important data.
 - Roadmap: more management-panel features for generated bots, deeper deployment recovery and diagnostics, and more multilingual documentation.
 
 ## Documentation

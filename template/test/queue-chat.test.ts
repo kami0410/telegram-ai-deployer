@@ -509,6 +509,22 @@ describe("queue chat outbox", () => {
         .first(),
     ).toEqual({ status: "failed", last_error_code: "upstream_5xx" });
   });
+
+  it("delivers a short fallback instead of silently dropping repeated invalid model responses", async () => {
+    const job = await chatJob();
+    const deps = dependencies({ deepSeekContent: "" });
+
+    await expect(processQueueMessage(job, env, deps.value)).resolves.toBeUndefined();
+
+    expect(
+      await env.DB.prepare("SELECT content FROM messages WHERE role = 'assistant'").first(),
+    ).toEqual({ content: "刚刚没响应出来，你再发我一次嘛。" });
+    expect(
+      await env.DB.prepare(
+        "SELECT status, last_error_code FROM processed_updates WHERE telegram_update_id = ?",
+      ).bind(job.telegramUpdateId).first(),
+    ).toEqual({ status: "processing", last_error_code: null });
+  });
 });
 
 describe("busy message aggregation", () => {

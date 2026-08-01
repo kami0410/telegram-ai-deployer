@@ -6,9 +6,11 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:backup": "node tools/persona-backup.selftest.mjs",
+    "backup": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/persona-backup.ps1 -Mode backup",
     "typecheck": "tsc --noEmit",
     "cf:types": "wrangler types --env-file config/type-bindings.env --strict-vars false",
-    "check": "npm run cf:types -- --check && npm run typecheck && npm test",
+    "check": "npm run cf:types -- --check && npm run typecheck && npm test && npm run test:backup",
     "deploy:dry": "wrangler deploy --dry-run",
     "deploy": "wrangler deploy --minify"
   },

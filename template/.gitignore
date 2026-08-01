@@ -1,0 +1,5 @@
+node_modules/
+.wrangler/
+backups/
+src/persona/imported-prompt.ts
+deployment-state.json

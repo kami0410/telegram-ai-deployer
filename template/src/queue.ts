@@ -59,6 +59,8 @@ import {
   reserveDailyRequest,
 } from "./storage/usage-repository";
 import { markUpdate } from "./storage/update-repository";
+import { safeLog } from "./logging";
+import { sha256Hex } from "./security";
 import {
   claimReminderDelivery,
   markReminderSent,
@@ -560,70 +562,77 @@ async function processReplyGroup(
   let inputTokens = 0;
   let outputTokens = 0;
   if (reserved) {
-    if (mode === "ask") {
-      const response = await requestChat(
-        thinkingDeepSeekOptions(env, dependencies),
-        buildAskPrompt({
-          question: combinedContent,
-          currentBeijingTime: beijingTime(now),
-        }).messages,
-      );
-      answer = response.content;
-      inputTokens = response.usage.inputTokens;
-      outputTokens = response.usage.outputTokens;
-    } else {
-      const persona = await getCurrentPersona(env.DB, ownerId);
-      if (persona === null || !persona.enabled) {
-        answer = "Persona Bot 人格当前不可用。";
-      } else {
-        const services = semanticServices(env, dependencies);
-        const [d1MemoryFacts, semanticMemoryFacts, summary, recent] = await Promise.all([
-          getRelevantMemoryFacts(env.DB, ownerId, combinedContent, 20, now),
-          services === null
-            ? Promise.resolve([])
-            : getSemanticRelevantMemories(
-                env.DB,
-                services.ai,
-                services.index,
-                ownerId,
-                combinedContent,
-                now,
-                explicitlyRequestsHistory(combinedContent),
-              ),
-          getLatestConversationSummary(env.DB, conversationId),
-          getRecentMessages(env.DB, conversationId, 30),
-        ]);
-        const memoryFacts = mergeMemories(d1MemoryFacts, semanticMemoryFacts, 20);
-        const sourceIds = new Set(sources.map((source) => source.id));
+    try {
+      if (mode === "ask") {
         const response = await requestChat(
-          deepSeekOptions(env, dependencies),
-          buildPersonaPrompt({
-            persona: persona.snapshot,
-            memoryFacts,
-            summary: summary?.summary ?? null,
-            recentMessages: recent
-              .filter(
-                (message) =>
-                  !sourceIds.has(message.messageId) && message.mode === "persona",
-              )
-              .map((message) => ({ role: message.role, content: message.content })),
-            currentMessage: combinedContent,
+          thinkingDeepSeekOptions(env, dependencies),
+          buildAskPrompt({
+            question: combinedContent,
             currentBeijingTime: beijingTime(now),
-            maxContextChars: 48_000,
           }).messages,
         );
         answer = response.content;
         inputTokens = response.usage.inputTokens;
         outputTokens = response.usage.outputTokens;
+      } else {
+        const persona = await getCurrentPersona(env.DB, ownerId);
+        if (persona === null || !persona.enabled) {
+          answer = "Persona Bot 人格当前不可用。";
+        } else {
+          const services = semanticServices(env, dependencies);
+          const [d1MemoryFacts, semanticMemoryFacts, summary, recent] = await Promise.all([
+            getRelevantMemoryFacts(env.DB, ownerId, combinedContent, 20, now),
+            services === null
+              ? Promise.resolve([])
+              : getSemanticRelevantMemories(
+                  env.DB,
+                  services.ai,
+                  services.index,
+                  ownerId,
+                  combinedContent,
+                  now,
+                  explicitlyRequestsHistory(combinedContent),
+                ),
+            getLatestConversationSummary(env.DB, conversationId),
+            getRecentMessages(env.DB, conversationId, 30),
+          ]);
+          const memoryFacts = mergeMemories(d1MemoryFacts, semanticMemoryFacts, 20);
+          const sourceIds = new Set(sources.map((source) => source.id));
+          const response = await requestChat(
+            deepSeekOptions(env, dependencies),
+            buildPersonaPrompt({
+              persona: persona.snapshot,
+              memoryFacts,
+              summary: summary?.summary ?? null,
+              recentMessages: recent
+                .filter(
+                  (message) =>
+                    !sourceIds.has(message.messageId) && message.mode === "persona",
+                )
+                .map((message) => ({ role: message.role, content: message.content })),
+              currentMessage: combinedContent,
+              currentBeijingTime: beijingTime(now),
+              maxContextChars: 48_000,
+            }).messages,
+          );
+          answer = response.content;
+          inputTokens = response.usage.inputTokens;
+          outputTokens = response.usage.outputTokens;
+        }
       }
+      await addDailyTokenUsage(
+        env.DB,
+        ownerId,
+        utcDate(now),
+        inputTokens,
+        outputTokens,
+      );
+    } catch (error) {
+      if (!(error instanceof DeepSeekError) || error.code !== "invalid_response") {
+        throw error;
+      }
+      answer = "刚刚没响应出来，你再发我一次嘛。";
     }
-    await addDailyTokenUsage(
-      env.DB,
-      ownerId,
-      utcDate(now),
-      inputTokens,
-      outputTokens,
-    );
   }
 
   const assistantMessageId = await saveAssistantAndAttach(env.DB, {
@@ -831,7 +840,10 @@ async function processPersonaDraft(
     });
     await enqueueDeliveries(deliveries, queueSender(env, dependencies), now);
   } catch (error) {
-    if (error instanceof DeepSeekError && error.code === "invalid_persona_draft") {
+    if (
+      error instanceof DeepSeekError &&
+      (error.code === "invalid_persona_draft" || error.code === "invalid_response")
+    ) {
       const owner = await getOwner(env.DB);
       if (owner !== null && owner.ownerId === job.ownerId) {
         try {
@@ -1391,13 +1403,51 @@ export async function processQueueBatch(
 ): Promise<void> {
   for (const message of batch.messages) {
     if (!isQueueJob(message.body)) {
+      safeLog({
+        eventHash: await sha256Hex("invalid_queue_job"),
+        stage: "queue_invalid",
+        durationMs: 0,
+        httpStatus: null,
+        errorCode: "invalid_queue_job",
+        inputTokens: null,
+        outputTokens: null,
+        chunkCount: null,
+        personaHash: null,
+      });
       message.ack();
       continue;
     }
+    const startedAt = Date.now();
+    const eventHash = await sha256Hex(JSON.stringify(message.body));
     try {
       await processQueueMessage(message.body, env);
+      safeLog({
+        eventHash,
+        stage: `queue_${message.body.type}`,
+        durationMs: Date.now() - startedAt,
+        httpStatus: null,
+        errorCode: null,
+        inputTokens: null,
+        outputTokens: null,
+        chunkCount: null,
+        personaHash: null,
+      });
       message.ack();
     } catch (error) {
+      safeLog({
+        eventHash,
+        stage: `queue_${message.body.type}`,
+        durationMs: Date.now() - startedAt,
+        httpStatus: error instanceof DeepSeekError ? error.status : null,
+        errorCode:
+          error instanceof DeepSeekError || error instanceof QueueProcessingError || error instanceof TelegramError
+            ? error.code
+            : "queue_processing_failed",
+        inputTokens: null,
+        outputTokens: null,
+        chunkCount: null,
+        personaHash: null,
+      });
       if (
         (error instanceof QueueProcessingError || error instanceof DeepSeekError) &&
         !error.retryable

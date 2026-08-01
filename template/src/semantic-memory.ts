@@ -9,6 +9,8 @@ import {
 
 const EMBEDDING_MODEL = "@cf/baai/bge-m3";
 const EMBEDDING_DIMENSIONS = 1_024;
+const AUTOMATIC_MINIMUM_SCORE = 0.55;
+const EXPLICIT_HISTORY_MINIMUM_SCORE = 0.45;
 
 export interface EmbeddingAi {
   run(model: string, input: { text: string[] }): Promise<unknown>;
@@ -164,12 +166,17 @@ export async function getSemanticRelevantMemories(
     });
     const scored = new Map<string, number>();
     const references: SemanticRecordReference[] = [];
+    const minimumScore = explicitHistory
+      ? EXPLICIT_HISTORY_MINIMUM_SCORE
+      : AUTOMATIC_MINIMUM_SCORE;
     for (const match of matches.matches) {
+      const score = typeof match.score === "number" ? match.score : 0;
+      if (score < minimumScore) continue;
       const reference = parseReference(match.id);
       if (reference === null) continue;
       const key = `${reference.kind}:${reference.id}`;
       if (scored.has(key)) continue;
-      scored.set(key, typeof match.score === "number" ? match.score : 0);
+      scored.set(key, score);
       references.push(reference);
     }
     const loaded: PromptMemoryFact[] = [];
