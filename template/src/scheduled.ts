@@ -3,7 +3,8 @@ import { createTelegramClient } from "./telegram";
 import { releaseStaleReminderClaims } from "./storage/reminder-repository";
 
 const WEEK_SECONDS = 7 * 86_400;
-const MINIMUM_PROACTIVE_GAP = 48 * 3_600;
+const DAY_SECONDS = 86_400;
+const MINIMUM_PROACTIVE_GAP = 4 * 3_600;
 const BEIJING_OFFSET_SECONDS = 8 * 3_600;
 
 const cryptoRandom: RandomSource = {
@@ -134,15 +135,10 @@ function randomInteger(
   return minimum + Math.floor((random.nextUint32() / 0x1_0000_0000) * width);
 }
 
-function weekStartEpoch(now: number): number {
-  const date = new Date(now * 1_000);
-  const daySinceMonday = (date.getUTCDay() + 6) % 7;
+function beijingDayStartEpoch(now: number): number {
   return (
-    Date.UTC(
-      date.getUTCFullYear(),
-      date.getUTCMonth(),
-      date.getUTCDate() - daySinceMonday,
-    ) / 1_000
+    Math.floor((now + BEIJING_OFFSET_SECONDS) / DAY_SECONDS) * DAY_SECONDS -
+    BEIJING_OFFSET_SECONDS
   );
 }
 
@@ -150,21 +146,23 @@ function dateKey(epochSeconds: number): string {
   return new Date(epochSeconds * 1_000).toISOString().slice(0, 10);
 }
 
-export function selectWeeklyTarget(random: RandomSource): 1 | 2 {
-  return randomInteger(1, 2, random) === 1 ? 1 : 2;
+export function selectDailyTarget(random: RandomSource): 2 | 3 {
+  return randomInteger(2, 3, random) === 2 ? 2 : 3;
 }
 
-export function calculateNextProactiveAt(
+export function calculateNextDailyProactiveAt(
   now: number,
-  weekEnd: number,
+  dayEnd: number,
   lastProactiveAt: number | null,
   random: RandomSource,
+  remainingContacts = 1,
 ): number {
   const minimum = Math.max(
     now,
     lastProactiveAt === null ? now : lastProactiveAt + MINIMUM_PROACTIVE_GAP,
   );
-  return randomInteger(minimum, Math.max(minimum, weekEnd - 1), random);
+  const latest = dayEnd - 1 - Math.max(0, remainingContacts - 1) * MINIMUM_PROACTIVE_GAP;
+  return randomInteger(minimum, Math.max(minimum, latest), random);
 }
 
 async function cleanupExpired(db: D1Database, now: number): Promise<void> {
@@ -264,9 +262,9 @@ export async function handleScheduled(
   }
   await scheduleOverdueMemoryUpdates(env, dependencies, owner.id);
 
-  const weekStart = weekStartEpoch(now);
-  const weekEnd = weekStart + WEEK_SECONDS;
-  const weekKey = dateKey(weekStart);
+  const dayStart = beijingDayStartEpoch(now);
+  const dayEnd = dayStart + DAY_SECONDS;
+  const dayKey = dateKey(dayStart + BEIJING_OFFSET_SECONDS);
   let schedule = await env.DB
     .prepare(
       `SELECT week_start, weekly_target, weekly_sent,
@@ -275,9 +273,16 @@ export async function handleScheduled(
     )
     .bind(owner.id)
     .first<RuntimeScheduleRow>();
-  if (schedule === null || schedule.week_start !== weekKey) {
-    const weeklyTarget = selectWeeklyTarget(random);
-    const nextProactiveAt = calculateNextProactiveAt(now, weekEnd, null, random);
+  if (schedule === null || schedule.week_start !== dayKey) {
+    const dailyTarget = selectDailyTarget(random);
+    const storedDailyTarget = dailyTarget - 1;
+    const nextProactiveAt = calculateNextDailyProactiveAt(
+      now,
+      dayEnd,
+      null,
+      random,
+      dailyTarget,
+    );
     await env.DB
       .prepare(
         `INSERT INTO persona_runtime_state (
@@ -292,11 +297,11 @@ export async function handleScheduled(
            last_proactive_at = NULL,
            updated_at = excluded.updated_at`,
       )
-      .bind(owner.id, nextProactiveAt, weekKey, weeklyTarget, now)
+      .bind(owner.id, nextProactiveAt, dayKey, storedDailyTarget, now)
       .run();
     schedule = {
-      week_start: weekKey,
-      weekly_target: weeklyTarget,
+      week_start: dayKey,
+      weekly_target: storedDailyTarget,
       weekly_sent: 0,
       last_proactive_at: null,
       next_proactive_at: nextProactiveAt,
@@ -306,7 +311,7 @@ export async function handleScheduled(
   if (
     schedule.next_proactive_at === null ||
     schedule.next_proactive_at > now ||
-    schedule.weekly_sent >= schedule.weekly_target
+    schedule.weekly_sent >= schedule.weekly_target + 1
   ) {
     return;
   }
@@ -321,7 +326,7 @@ export async function handleScheduled(
     .bind(owner.id)
     .first<{ count: number }>();
   if ((pending?.count ?? 0) > 0) {
-    const delayed = Math.min(weekEnd - 1, now + 6 * 3_600);
+    const delayed = Math.min(dayEnd - 1, now + 3_600);
     await env.DB
       .prepare(
         `UPDATE persona_runtime_state
@@ -332,32 +337,19 @@ export async function handleScheduled(
     return;
   }
 
-  if (schedule.weekly_sent > 0 && schedule.last_proactive_at !== null) {
-    const reply = await env.DB
-      .prepare(
-        `SELECT 1 AS replied FROM messages
-         WHERE owner_id = ? AND role = 'user' AND created_at > ?
-         LIMIT 1`,
-      )
-      .bind(owner.id, schedule.last_proactive_at)
-      .first<{ replied: number }>();
-    if (reply === null) {
-      await env.DB
-        .prepare(
-          `UPDATE persona_runtime_state
-           SET next_proactive_at = NULL, updated_at = ? WHERE owner_id = ?`,
-        )
-        .bind(now, owner.id)
-        .run();
-      return;
-    }
-  }
-
   const sentAfter = schedule.weekly_sent + 1;
+  const dailyTarget = schedule.weekly_target + 1;
+  const remainingContacts = dailyTarget - sentAfter;
   const next =
-    sentAfter >= schedule.weekly_target || now + MINIMUM_PROACTIVE_GAP >= weekEnd
+    remainingContacts <= 0 || now + MINIMUM_PROACTIVE_GAP >= dayEnd
       ? null
-      : calculateNextProactiveAt(now, weekEnd, now, random);
+      : calculateNextDailyProactiveAt(
+          now,
+          dayEnd,
+          now,
+          random,
+          remainingContacts,
+        );
   const reserved = await env.DB
     .prepare(
       `UPDATE persona_runtime_state

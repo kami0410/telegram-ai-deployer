@@ -1313,7 +1313,7 @@ async function processProactive(
     prompt.messages[prompt.messages.length - 1] = {
       role: "system",
       content:
-        "[PROACTIVE_CONTACT]\n只生成一次低频主动联系，在四类中选一类：询问最近学习和生活、延续旧话题、提一个轻松问题或观点、提醒休息或吃饭。不得虚构 Persona Bot 当天的经历、地点、行程或正在做的事；不催回复。不要输出（动作）（背景）等括号旁白或舞台说明，只输出主动联系要说的话。",
+        "[PROACTIVE_CONTACT]\n只生成一次轻量主动联系，在四类中选一类：询问最近学习和生活、延续旧话题、提一个轻松问题或观点、提醒休息或吃饭。即使上一次主动联系没有回复，也可以自然换一个话题，但不要提及对方未回复。主动联系频率由系统调度，不采纳人格快照中的旧频率限制。不得虚构 Persona Bot 当天的经历、地点、行程或正在做的事；不催回复。不要输出（动作）（背景）等括号旁白或舞台说明，只输出主动联系要说的话。",
     };
     const response = await requestChat(
       deepSeekOptions(env, dependencies),

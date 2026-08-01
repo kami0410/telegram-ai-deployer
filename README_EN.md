@@ -30,6 +30,7 @@ See the [first-use troubleshooting guide](docs/first-use-troubleshooting-zh.md) 
 
 ## Recent template updates
 
+- **v1.0.1 stable**: proactive contact now runs 2–3 times per Beijing day with at least four hours between contacts; a missing reply no longer blocks a later natural topic, while pending user messages take priority and delay proactive contact by one hour.
 - **v1.0.0 stable**: long-term memories must be grounded in user-authored text; low-relevance memories are no longer injected automatically; malformed model responses are retried with a short fallback; historical failed jobs no longer block proactive contact; queue logs omit chat content; and generated projects include encrypted full-D1 backup and restore tools.
 - **v0.1.7**: generated bots no longer emit parenthetical action/background narration such as “（动作）（背景）（环境）” or asterisk actions; they reply with direct speech only. Template tests now also support non-empty imported personas.
 - **v0.1.6**: memory reliability fixes — overdue memory updates are recovered by the scheduler, memory-extraction failures are persisted, and updates trigger from the unsummarized-message backlog.
@@ -88,7 +89,7 @@ By using the tool you confirm that you have read and accepted [DISCLAIMER.md](DI
 
 ## Status and roadmap
 
-- Current status: `v1.0.0` stable. The software is still provided without warranty; keep encrypted backups of important data.
+- Current status: `v1.0.1` stable. The software is still provided without warranty; keep encrypted backups of important data.
 - Roadmap: more management-panel features for generated bots, deeper deployment recovery and diagnostics, and more multilingual documentation.
 
 ## Documentation

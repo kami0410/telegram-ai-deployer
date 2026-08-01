@@ -1,9 +1,9 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  calculateNextProactiveAt,
+  calculateNextDailyProactiveAt,
   handleScheduled,
-  selectWeeklyTarget,
+  selectDailyTarget,
   type ScheduledDependencies,
 } from "../src/scheduled";
 import {
@@ -124,37 +124,37 @@ it("requeues an overdue persona memory summary from the scheduled recovery pass"
   });
 });
 
-describe("weekly proactive schedule", () => {
-  it("chooses exactly one or two contacts and has no quiet-hour restriction", () => {
-    expect(selectWeeklyTarget(source([0]))).toBe(1);
-    expect(selectWeeklyTarget(source([0xffff_ffff]))).toBe(2);
+describe("daily proactive schedule", () => {
+  it("chooses exactly two or three contacts and schedules inside the Beijing day", () => {
+    expect(selectDailyTarget(source([0]))).toBe(2);
+    expect(selectDailyTarget(source([0xffff_ffff]))).toBe(3);
 
-    const weekEnd = MONDAY + 7 * 86_400;
-    const atMidnight = calculateNextProactiveAt(
+    const dayEnd = MONDAY + 16 * 3_600;
+    const atMidnight = calculateNextDailyProactiveAt(
       MONDAY,
-      weekEnd,
+      dayEnd,
       null,
       source([0]),
     );
-    const lateNight = calculateNextProactiveAt(
+    const lateNight = calculateNextDailyProactiveAt(
       MONDAY,
-      weekEnd,
+      dayEnd,
       null,
       source([0xffff_ffff]),
     );
     expect(atMidnight).toBe(MONDAY);
-    expect(lateNight).toBeLessThan(weekEnd);
+    expect(lateNight).toBeLessThan(dayEnd);
     expect(new Date(lateNight * 1_000).getUTCHours()).toBeGreaterThanOrEqual(0);
   });
 
-  it("enqueues at most the target with a 48-hour gap and no follow-up after silence", async () => {
+  it("sends twice in one Beijing day even when the first contact gets no reply", async () => {
     const ownerId = await fixture();
     await env.DB
       .prepare(
         `INSERT INTO persona_runtime_state (
            owner_id, next_proactive_at, week_start, weekly_target,
            weekly_sent, updated_at
-         ) VALUES (?, ?, '2026-07-20', 2, 0, ?)`,
+         ) VALUES (?, ?, '2026-07-20', 1, 0, ?)`,
       )
       .bind(ownerId, MONDAY, MONDAY)
       .run();
@@ -178,11 +178,11 @@ describe("weekly proactive schedule", () => {
       }>();
     expect(state?.weekly_sent).toBe(1);
     expect(state?.last_proactive_at).toBe(MONDAY);
-    expect(state?.next_proactive_at).toBeGreaterThanOrEqual(MONDAY + 48 * 3_600);
+    expect(state?.next_proactive_at).toBeGreaterThanOrEqual(MONDAY + 4 * 3_600);
 
-    now = state?.next_proactive_at ?? MONDAY + 48 * 3_600;
+    now = state?.next_proactive_at ?? MONDAY + 4 * 3_600;
     await handleScheduled(env, deps.value);
-    expect(deps.jobs).toHaveLength(1);
+    expect(deps.jobs).toHaveLength(2);
     expect(
       await env.DB
         .prepare("SELECT next_proactive_at FROM persona_runtime_state WHERE owner_id = ?")
@@ -215,9 +215,9 @@ describe("weekly proactive schedule", () => {
     });
   });
 
-  it("permits a second contact after OWNER replied and suppresses pending messages", async () => {
+  it("suppresses proactive contact while a user message is pending", async () => {
     const ownerId = await fixture();
-    const due = MONDAY + 48 * 3_600;
+    const due = MONDAY + 4 * 3_600;
     await env.DB
       .prepare(
         `INSERT INTO persona_runtime_state (
@@ -269,18 +269,19 @@ describe("weekly proactive schedule", () => {
     expect(deps.jobs).toHaveLength(1);
   });
 
-  it("resets a new UTC week deterministically", async () => {
+  it("resets at the start of a new Beijing day", async () => {
     const ownerId = await fixture();
     await env.DB
       .prepare(
         `INSERT INTO persona_runtime_state (
            owner_id, next_proactive_at, week_start, weekly_target,
            weekly_sent, last_proactive_at, updated_at
-         ) VALUES (?, NULL, '2026-07-13', 2, 2, ?, ?)`,
+         ) VALUES (?, NULL, '2026-07-20', 2, 3, ?, ?)`,
       )
       .bind(ownerId, MONDAY - 86_400, MONDAY - 86_400)
       .run();
-    const deps = dependencies(() => MONDAY, source([0, 0]));
+    const nextBeijingDay = MONDAY + 16 * 3_600;
+    const deps = dependencies(() => nextBeijingDay, source([0, 0]));
     await handleScheduled(env, deps.value);
 
     expect(
@@ -291,7 +292,7 @@ describe("weekly proactive schedule", () => {
         )
         .bind(ownerId)
         .first(),
-    ).toEqual({ week_start: "2026-07-20", weekly_target: 1, weekly_sent: 1 });
+    ).toEqual({ week_start: "2026-07-21", weekly_target: 1, weekly_sent: 1 });
   });
 });
 
@@ -375,6 +376,7 @@ describe("proactive queue content", () => {
     expect(bodies[0]).toContain("轻松问题或观点");
     expect(bodies[0]).toContain("休息或吃饭");
     expect(bodies[0]).toContain("不得虚构");
+    expect(bodies[0]).toContain("即使上一次主动联系没有回复");
     expect(
       await env.DB.prepare("SELECT content FROM messages WHERE role = 'assistant'").first(),
     ).toEqual({ content: "干啥呢最近" });
