@@ -99,6 +99,11 @@ api.onProgress((event) => {
   }
 });
 
+api.onUpdateStatus((status) => {
+  const target = document.querySelector("#updateStatus");
+  if (target && typeof status?.message === "string") target.textContent = status.message;
+});
+
 async function submit(resume = false) {
   if (running) return;
   const payload = consumeDeploymentForm(secrets, values());

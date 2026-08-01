@@ -249,15 +249,22 @@ export async function loadSemanticRecords(
   for (const record of records) {
     if (record.kind === "fact") {
       const row = await db.prepare(
-        `SELECT fact_key, fact_value, category, confidence
-         FROM memory_facts WHERE id = ? AND owner_id = ?`,
+        `SELECT fact_key, fact_value, category, confidence, last_used_at
+         FROM memory_facts WHERE id = ? AND owner_id = ?
+           AND NOT EXISTS (SELECT 1 FROM memory_controls
+             WHERE owner_id = memory_facts.owner_id AND entity_kind = 'fact'
+               AND entity_id = memory_facts.id AND control = 'ignored')`,
       ).bind(record.id, ownerId).first<{
         fact_key: string;
         fact_value: string;
         category: string;
         confidence: MemoryConfidence;
+        last_used_at: number | null;
       }>();
-      if (row !== null) loaded.push({
+      if (row !== null && !(options.automaticOnlyAt !== undefined && row.last_used_at !== null &&
+        options.automaticOnlyAt - row.last_used_at < 12 * 3_600)) loaded.push({
+        sourceKind: "fact",
+        sourceId: record.id,
         factKey: row.fact_key,
         factValue: row.fact_value,
         category: row.category,
@@ -266,22 +273,29 @@ export async function loadSemanticRecords(
       });
     } else {
       const row = await db.prepare(
-        `SELECT content, category, people_json, topics_json, auto_inject_until
+        `SELECT content, category, people_json, topics_json, auto_inject_until, last_used_at
          FROM memory_episodes
-         WHERE id = ? AND owner_id = ? AND status = 'active'`,
+         WHERE id = ? AND owner_id = ? AND status = 'active'
+           AND NOT EXISTS (SELECT 1 FROM memory_controls
+             WHERE owner_id = memory_episodes.owner_id AND entity_kind = 'episode'
+               AND entity_id = memory_episodes.id AND control = 'ignored')`,
       ).bind(record.id, ownerId).first<{
         content: string;
         category: string;
         people_json: string;
         topics_json: string;
         auto_inject_until: number;
+        last_used_at: number | null;
       }>();
       if (
         row !== null &&
-        (options.automaticOnlyAt === undefined || row.auto_inject_until >= options.automaticOnlyAt)
+        (options.automaticOnlyAt === undefined || (row.auto_inject_until >= options.automaticOnlyAt &&
+          (row.last_used_at === null || options.automaticOnlyAt - row.last_used_at >= 12 * 3_600)))
       ) {
         const labels = [...parseStringArray(row.people_json), ...parseStringArray(row.topics_json)];
         loaded.push({
+          sourceKind: "episode",
+          sourceId: record.id,
           factKey: `episode:${record.id}`,
           factValue: labels.length === 0 ? row.content : `${row.content}（${labels.join("、")}）`,
           category: row.category,
@@ -290,6 +304,11 @@ export async function loadSemanticRecords(
         });
       }
     }
+  }
+  for (const memory of loaded) {
+    const table = memory.sourceKind === "fact" ? "memory_facts" : "memory_episodes";
+    await db.prepare(`UPDATE ${table} SET last_used_at = ? WHERE id = ? AND owner_id = ?`)
+      .bind(options.automaticOnlyAt ?? Math.floor(Date.now() / 1_000), memory.sourceId, ownerId).run();
   }
   return loaded;
 }

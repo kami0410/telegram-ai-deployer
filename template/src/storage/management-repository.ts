@@ -10,6 +10,7 @@ export interface ManagedMemory {
   confidence: MemoryConfidence;
   createdAt: number;
   updatedAt: number;
+  control: "normal" | "pinned" | "ignored";
 }
 
 export interface MemoryPage {
@@ -32,6 +33,7 @@ export interface ManagedEpisode {
   topics: string[];
   occurredAt: number;
   updatedAt: number;
+  control: "normal" | "pinned" | "ignored";
 }
 
 export interface ManagementOverview {
@@ -69,6 +71,7 @@ interface MemoryRow {
   confidence: MemoryConfidence;
   created_at: number;
   updated_at: number;
+  control: "normal" | "pinned" | "ignored";
 }
 
 interface EpisodeRow {
@@ -79,6 +82,7 @@ interface EpisodeRow {
   topics_json: string;
   occurred_at: number;
   updated_at: number;
+  control: "normal" | "pinned" | "ignored";
 }
 
 function isMemoryConfidence(value: string): value is MemoryConfidence {
@@ -93,7 +97,9 @@ function stringArray(value: string): string[] {
   try {
     const parsed: unknown = JSON.parse(value);
     return Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string") ? parsed : [];
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 function encodeCursor(updatedAt: number, id: number): string {
@@ -124,6 +130,7 @@ function toManagedMemory(row: MemoryRow): ManagedMemory {
     confidence: row.confidence,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    control: row.control,
   };
 }
 
@@ -157,7 +164,9 @@ export async function listMemories(
     binds.push(cursor[0], cursor[0], cursor[1]);
   }
   const result = await db.prepare(
-    `SELECT id, category, fact_key, fact_value, confidence, created_at, updated_at
+    `SELECT id, category, fact_key, fact_value, confidence, created_at, updated_at,
+       COALESCE((SELECT control FROM memory_controls WHERE owner_id = memory_facts.owner_id
+         AND entity_kind = 'fact' AND entity_id = memory_facts.id), 'normal') AS control
      FROM memory_facts WHERE ${clauses.join(" AND ")}
      ORDER BY updated_at DESC, id DESC LIMIT ?`,
   ).bind(...binds, limit + 1).all<MemoryRow>();
@@ -178,20 +187,25 @@ export async function listEpisodes(
 ): Promise<{ items: ManagedEpisode[] }> {
   if (category !== undefined && !isCategory(category)) throw new Error("memory_category_invalid");
   const result = await db.prepare(
-    `SELECT id, category, content, people_json, topics_json, occurred_at, updated_at
+    `SELECT id, category, content, people_json, topics_json, occurred_at, updated_at,
+       COALESCE((SELECT control FROM memory_controls WHERE owner_id = memory_episodes.owner_id
+         AND entity_kind = 'episode' AND entity_id = memory_episodes.id), 'normal') AS control
      FROM memory_episodes
      WHERE owner_id = ? AND status = 'active'${category === undefined ? "" : " AND category = ?"}
      ORDER BY occurred_at DESC, id DESC LIMIT 50`,
   ).bind(ownerId, ...(category === undefined ? [] : [category])).all<EpisodeRow>();
-  return { items: result.results.map((episode) => ({
-    id: episode.id,
-    category: episode.category,
-    content: episode.content,
-    people: stringArray(episode.people_json),
-    topics: stringArray(episode.topics_json),
-    occurredAt: episode.occurred_at,
-    updatedAt: episode.updated_at,
-  })) };
+  return {
+    items: result.results.map((episode) => ({
+      id: episode.id,
+      category: episode.category,
+      content: episode.content,
+      people: stringArray(episode.people_json),
+      topics: stringArray(episode.topics_json),
+      occurredAt: episode.occurred_at,
+      updatedAt: episode.updated_at,
+      control: episode.control,
+    })),
+  };
 }
 
 export async function updateMemory(
@@ -299,11 +313,18 @@ export async function deleteEpisode(
 ): Promise<boolean> {
   const results = await db.batch([
     db.prepare(
-      `INSERT INTO memory_vector_jobs (owner_id, entity_kind, entity_id, operation, status, attempt_count, last_error_code, created_at, updated_at)
+      `INSERT INTO memory_vector_jobs (
+         owner_id, entity_kind, entity_id, operation, status,
+         attempt_count, last_error_code, created_at, updated_at
+       )
        SELECT ?, 'episode', ?, 'delete', 'pending', 0, NULL, ?, ?
-       WHERE EXISTS (SELECT 1 FROM memory_episodes WHERE id = ? AND owner_id = ? AND updated_at = ? AND status = 'active')
+       WHERE EXISTS (
+         SELECT 1 FROM memory_episodes
+         WHERE id = ? AND owner_id = ? AND updated_at = ? AND status = 'active'
+       )
        ON CONFLICT(owner_id, entity_kind, entity_id) DO UPDATE SET
-         operation = 'delete', status = 'pending', attempt_count = 0, last_error_code = NULL, updated_at = excluded.updated_at`,
+         operation = 'delete', status = 'pending', attempt_count = 0,
+         last_error_code = NULL, updated_at = excluded.updated_at`,
     ).bind(ownerId, episodeId, now, now, episodeId, ownerId, expectedUpdatedAt),
     db.prepare(
       `UPDATE memory_episodes SET status = 'deleted', updated_at = ?
@@ -312,6 +333,63 @@ export async function deleteEpisode(
   ]);
   if (!results.every((result) => result.success)) throw new Error("episode_delete_failed");
   return (results[1]?.meta.changes ?? 0) === 1;
+}
+
+export async function listReplyMemoryUsage(
+  db: D1Database,
+  ownerId: number,
+  limit = 20,
+): Promise<Array<{
+  assistantMessageId: number;
+  intent: string;
+  createdAt: number;
+  memories: Array<{ kind: "fact" | "episode"; id: number; text: string; control: string }>;
+}>> {
+  const rows = await db.prepare(
+    `SELECT assistant_message_id, intent, memory_refs_json, created_at
+     FROM reply_contexts WHERE owner_id = ? AND memory_refs_json <> '[]'
+     ORDER BY created_at DESC, assistant_message_id DESC LIMIT ?`,
+  ).bind(ownerId, Math.max(1, Math.min(50, Math.floor(limit))))
+    .all<{ assistant_message_id: number; intent: string; memory_refs_json: string; created_at: number }>();
+  const output = [];
+  for (const row of rows.results) {
+    let refs: Array<{ kind: "fact" | "episode"; id: number }> = [];
+    try {
+      const parsed: unknown = JSON.parse(row.memory_refs_json);
+      if (Array.isArray(parsed)) {
+        refs = parsed.flatMap((value) => {
+          if (typeof value !== "object" || value === null) return [];
+          const candidate = value as { kind?: unknown; id?: unknown };
+          return (candidate.kind === "fact" || candidate.kind === "episode") &&
+              Number.isSafeInteger(candidate.id) && Number(candidate.id) > 0
+            ? [{ kind: candidate.kind, id: Number(candidate.id) }]
+            : [];
+        });
+      }
+    } catch {
+      refs = [];
+    }
+    const memories: Array<{ kind: "fact" | "episode"; id: number; text: string; control: string }> = [];
+    for (const ref of refs.slice(0, 20)) {
+      const table = ref.kind === "fact" ? "memory_facts" : "memory_episodes";
+      const valueColumn = ref.kind === "fact" ? "fact_value" : "content";
+      const memory = await db.prepare(
+        `SELECT ${valueColumn} AS text,
+          COALESCE((SELECT control FROM memory_controls WHERE owner_id = ?
+            AND entity_kind = ? AND entity_id = ?), 'normal') AS control
+         FROM ${table} WHERE id = ? AND owner_id = ?`,
+      ).bind(ownerId, ref.kind, ref.id, ref.id, ownerId)
+        .first<{ text: string; control: string }>();
+      if (memory !== null) memories.push({ ...ref, text: memory.text, control: memory.control });
+    }
+    output.push({
+      assistantMessageId: row.assistant_message_id,
+      intent: row.intent,
+      createdAt: row.created_at,
+      memories,
+    });
+  }
+  return output;
 }
 
 export async function getManagementOverview(

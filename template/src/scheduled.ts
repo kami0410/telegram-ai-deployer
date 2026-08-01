@@ -1,6 +1,10 @@
 import type { QueueJob, QueueSender, RandomSource } from "./queue";
 import { createTelegramClient } from "./telegram";
 import { releaseStaleReminderClaims } from "./storage/reminder-repository";
+import {
+  getChatPreferences,
+  isProactiveAllowedNow,
+} from "./storage/chat-preferences-repository";
 
 const WEEK_SECONDS = 7 * 86_400;
 const DAY_SECONDS = 86_400;
@@ -146,8 +150,12 @@ function dateKey(epochSeconds: number): string {
   return new Date(epochSeconds * 1_000).toISOString().slice(0, 10);
 }
 
-export function selectDailyTarget(random: RandomSource): 2 | 3 {
-  return randomInteger(2, 3, random) === 2 ? 2 : 3;
+export function selectDailyTarget(
+  random: RandomSource,
+  minimum = 2,
+  maximum = 3,
+): number {
+  return randomInteger(minimum, maximum, random);
 }
 
 export function calculateNextDailyProactiveAt(
@@ -261,6 +269,8 @@ export async function handleScheduled(
     });
   }
   await scheduleOverdueMemoryUpdates(env, dependencies, owner.id);
+  const preferences = await getChatPreferences(env.DB, owner.id);
+  if (!(await isProactiveAllowedNow(env.DB, owner.id, now))) return;
 
   const dayStart = beijingDayStartEpoch(now);
   const dayEnd = dayStart + DAY_SECONDS;
@@ -274,7 +284,9 @@ export async function handleScheduled(
     .bind(owner.id)
     .first<RuntimeScheduleRow>();
   if (schedule === null || schedule.week_start !== dayKey) {
-    const dailyTarget = selectDailyTarget(random);
+    const dailyTarget = preferences.consecutiveUnanswered >= 2
+      ? 1
+      : selectDailyTarget(random, preferences.dailyMin, preferences.dailyMax);
     const storedDailyTarget = dailyTarget - 1;
     const nextProactiveAt = calculateNextDailyProactiveAt(
       now,
@@ -321,7 +333,7 @@ export async function handleScheduled(
       `SELECT COUNT(*) AS count
        FROM processed_updates
        WHERE owner_id = ?
-         AND status IN ('received', 'queued', 'processing')`,
+          AND status IN ('received', 'queued', 'processing')`,
     )
     .bind(owner.id)
     .first<{ count: number }>();

@@ -24,6 +24,12 @@ import {
   splitTelegramText,
   type TelegramClient,
 } from "./telegram";
+import {
+  feedbackLabel,
+  resolveInteractionPreferenceDraft,
+  saveReplyFeedback,
+  type ReplyFeedbackKind,
+} from "./storage/reply-feedback-repository";
 
 const WEBHOOK_PATH = "/telegram/webhook";
 const MAX_UPDATE_BYTES = 64 * 1_024;
@@ -48,7 +54,7 @@ interface PrivateCallbackUpdate {
 
 export interface WebhookDependencies {
   fetcher?: typeof fetch;
-  queue?: { send(message: unknown): Promise<void> };
+  queue?: { send(message: unknown, options?: { delaySeconds?: number }): Promise<void> };
   now?: () => number;
 }
 
@@ -66,6 +72,15 @@ interface QueuePersonaDraftJob {
   ownerId: number;
   telegramUpdateId: number;
   messageId: number;
+}
+
+interface QueueEphemeralJob {
+  type: "ephemeral";
+  mode: "temp" | "redo";
+  ownerId: number;
+  telegramUpdateId: number;
+  chatId: number;
+  content: string;
 }
 
 class BodyTooLargeError extends Error {}
@@ -269,6 +284,85 @@ export async function handleWebhook(
     const claim = await claimUpdate(env.DB, callback.updateId, owner.ownerId, now);
     if (claim === "duplicate") {
       await telegram.answerCallbackQuery(callback.callbackQueryId, "这个操作已经处理过了");
+      return ok();
+    }
+    const adjustmentOpen = callback.data.match(/^ra:o:(\d+)$/u);
+    if (adjustmentOpen !== null) {
+      const assistantMessageId = Number(adjustmentOpen[1]);
+      const choices: Array<[string, string]> = [
+        ["不像她", "x"], ["太黏了", "c"], ["太正式", "f"],
+        ["太长了", "l"], ["别急着建议", "n"], ["记错了", "m"],
+      ];
+      await telegram.editMessageReplyMarkup(callback.chatId, callback.messageId, {
+        inline_keyboard: [
+          choices.slice(0, 3).map(([text, code]) => ({
+            text,
+            callback_data: `ra:f:${code}:${assistantMessageId}`,
+          })),
+          choices.slice(3).map(([text, code]) => ({
+            text,
+            callback_data: `ra:f:${code}:${assistantMessageId}`,
+          })),
+        ],
+      });
+      await telegram.answerCallbackQuery(callback.callbackQueryId, "选择要调整的地方");
+      await markIfPresent(env.DB, callback.updateId, "completed", now);
+      return ok();
+    }
+    const adjustmentFeedback = callback.data.match(/^ra:f:([xcflnm]):(\d+)$/u);
+    if (adjustmentFeedback !== null) {
+      const kinds: Record<string, ReplyFeedbackKind> = {
+        x: "not_like",
+        c: "too_clingy",
+        f: "too_formal",
+        l: "too_long",
+        n: "no_advice",
+        m: "wrong_memory",
+      };
+      const feedback = await saveReplyFeedback(env.DB, {
+        ownerId: owner.ownerId,
+        assistantMessageId: Number(adjustmentFeedback[2]),
+        kind: kinds[adjustmentFeedback[1] ?? ""] ?? "not_like",
+        now,
+      });
+      await telegram.editMessageReplyMarkup(callback.chatId, callback.messageId, {
+        inline_keyboard: [],
+      });
+      await telegram.answerCallbackQuery(
+        callback.callbackQueryId,
+        feedback.saved ? "已记录，近期相似场景会调整" : "这条回复已经无法调整",
+      );
+      if (feedback.draft !== null) {
+        await telegram.sendMessage(
+          callback.chatId,
+          `你已经多次选择“${feedbackLabel(feedback.draft.kind)}”。要把它设为长期互动偏好吗？`,
+          { replyMarkup: { inline_keyboard: [[
+            { text: "确认长期使用", callback_data: `ip:c:${feedback.draft.id}` },
+            { text: "取消", callback_data: `ip:x:${feedback.draft.id}` },
+          ]] } },
+        );
+      }
+      await markIfPresent(env.DB, callback.updateId, "completed", now);
+      return ok();
+    }
+    const interactionPreference = callback.data.match(/^ip:(c|x):([0-9a-f-]{36})$/u);
+    if (interactionPreference !== null) {
+      const confirmed = interactionPreference[1] === "c";
+      const resolved = await resolveInteractionPreferenceDraft(
+        env.DB,
+        owner.ownerId,
+        interactionPreference[2] ?? "",
+        confirmed ? "confirmed" : "cancelled",
+        now,
+      );
+      await telegram.editMessageReplyMarkup(callback.chatId, callback.messageId, {
+        inline_keyboard: [],
+      });
+      await telegram.answerCallbackQuery(
+        callback.callbackQueryId,
+        resolved ? (confirmed ? "已设为长期互动偏好" : "已取消") : "这个草稿已经处理或过期了",
+      );
+      await markIfPresent(env.DB, callback.updateId, "completed", now);
       return ok();
     }
     const memoryConflict = callback.data.match(/^mc:(n|k):([0-9a-f-]{36})$/u);
@@ -502,7 +596,7 @@ export async function handleWebhook(
   if (claim === "duplicate") return ok();
 
   if (command?.name === "settings") {
-    await telegram.sendMessage(update.chatId, "打开 Persona Bot 管理面板", {
+    await telegram.sendMessage(update.chatId, "打开 Persona 管理面板", {
       replyMarkup: {
         inline_keyboard: [[
           { text: "打开管理面板", web_app: { url: new URL("/app", url.origin).toString() } },
@@ -536,12 +630,52 @@ export async function handleWebhook(
     reminderWorkflow: env.REMINDER_WORKFLOW,
   });
   if (commandResult.handled && commandResult.enqueue === undefined) {
-    await sendTexts(telegram, update.chatId, commandResult.messages);
+    if (commandResult.adjustAssistantMessageId !== undefined) {
+      await telegram.sendMessage(update.chatId, commandResult.messages[0] ?? "调整最近一次 Persona 回复：", {
+        replyMarkup: {
+          inline_keyboard: [
+            [
+              { text: "不像她", callback_data: `ra:f:x:${commandResult.adjustAssistantMessageId}` },
+              { text: "太黏了", callback_data: `ra:f:c:${commandResult.adjustAssistantMessageId}` },
+              { text: "太正式", callback_data: `ra:f:f:${commandResult.adjustAssistantMessageId}` },
+            ],
+            [
+              { text: "太长了", callback_data: `ra:f:l:${commandResult.adjustAssistantMessageId}` },
+              { text: "别急着建议", callback_data: `ra:f:n:${commandResult.adjustAssistantMessageId}` },
+              { text: "记错了", callback_data: `ra:f:m:${commandResult.adjustAssistantMessageId}` },
+            ],
+          ],
+        },
+      });
+    } else {
+      await sendTexts(telegram, update.chatId, commandResult.messages);
+    }
     await markIfPresent(env.DB, update.updateId, "completed", now);
     return ok();
   }
 
   const requestedMode = commandResult.enqueue?.mode ?? "persona";
+  if (requestedMode === "temp" || requestedMode === "redo") {
+    if (requestedMode === "temp") {
+      await telegram.sendMessage(update.chatId, "这次内容不会写入 Persona 记忆；Telegram 客户端自身仍可能保留消息。");
+    }
+    const job: QueueEphemeralJob = {
+      type: "ephemeral",
+      mode: requestedMode,
+      ownerId: owner.ownerId,
+      telegramUpdateId: update.updateId,
+      chatId: update.chatId,
+      content: commandResult.enqueue?.content ?? "",
+    };
+    try {
+      await queue.send(job);
+      await markIfPresent(env.DB, update.updateId, "queued", now);
+    } catch {
+      await markIfPresent(env.DB, update.updateId, "failed", now, "queue_send_failed");
+      return new Response("Temporary failure", { status: 500 });
+    }
+    return ok();
+  }
   const storageMode =
     requestedMode === "persona_addition" ? "system" : requestedMode;
   const content = commandResult.enqueue?.content ?? update.text;
@@ -585,7 +719,9 @@ export async function handleWebhook(
           messageId,
         };
   try {
-    await queue.send(job);
+    const listeningDelay = requestedMode === "persona" && content.length <= 80 &&
+      !/[。！？!?]\s*$/u.test(content) ? 4 : 0;
+    await queue.send(job, listeningDelay > 0 ? { delaySeconds: listeningDelay } : undefined);
     await markIfPresent(env.DB, update.updateId, "queued", now);
   } catch {
     await markIfPresent(env.DB, update.updateId, "failed", now, "queue_send_failed");

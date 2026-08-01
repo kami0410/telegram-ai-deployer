@@ -381,7 +381,7 @@ export async function seedPersona(
 
   const snapshotJson = canonicalPersonaJson(PERSONA_V1);
   const snapshotHash = await sha256Hex(snapshotJson);
-  const summary = "获批的 Persona Bot 初始人格";
+  const summary = "获批的 Persona 初始人格";
   const results = await db.batch([
     db
       .prepare(

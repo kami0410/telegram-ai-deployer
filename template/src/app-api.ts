@@ -6,6 +6,7 @@ import {
   getManagementOverview,
   listEpisodes,
   listMemories,
+  listReplyMemoryUsage,
   listPersonaDrafts,
   listPersonaVersions,
   recordManagementEvent,
@@ -24,6 +25,19 @@ import {
   getMemoryConflict,
   updateMemoryConflictCandidate,
 } from "./storage/semantic-memory-repository";
+import {
+  setMemoryControl,
+  type MemoryControl,
+  type MemoryEntityKind,
+} from "./storage/memory-control-repository";
+import {
+  getChatPreferences,
+  updateChatPreferences,
+} from "./storage/chat-preferences-repository";
+import {
+  listRelationshipTimeline,
+  updateRelationshipTimelineItem,
+} from "./storage/realism-repository";
 
 const MAX_BODY_BYTES = 16 * 1_024;
 const JSON_HEADERS = {
@@ -136,6 +150,39 @@ async function route(
   if (path === "/api/app/overview" && request.method === "GET") {
     return json(await getManagementOverview(env.DB, ownerId));
   }
+  if (path === "/api/app/chat-preferences" && request.method === "GET") {
+    return json(await getChatPreferences(env.DB, ownerId));
+  }
+  if (path === "/api/app/chat-preferences" && request.method === "PATCH") {
+    const body = await readJson(request);
+    const nullableInteger = (value: unknown): value is number | null =>
+      value === null || Number.isSafeInteger(value);
+    if (
+      typeof body.proactiveEnabled !== "boolean" ||
+      !Number.isSafeInteger(body.dailyMin) ||
+      !Number.isSafeInteger(body.dailyMax) ||
+      !nullableInteger(body.quietStartMinute) ||
+      !nullableInteger(body.quietEndMinute) ||
+      !nullableInteger(body.pausedUntil) ||
+      (body.pausedUntil !== null && body.pausedUntil < 0) ||
+      (body.quietStartMinute === null) !== (body.quietEndMinute === null) ||
+      (body.dailyMin as number) < 1 ||
+      (body.dailyMax as number) > 3 ||
+      (body.dailyMin as number) > (body.dailyMax as number) ||
+      (body.quietStartMinute !== null && (body.quietStartMinute < 0 || body.quietStartMinute > 1439)) ||
+      (body.quietEndMinute !== null && (body.quietEndMinute < 0 || body.quietEndMinute > 1439))
+    ) throw new HttpError(400, "invalid_chat_preferences");
+    await updateChatPreferences(env.DB, ownerId, {
+      proactiveEnabled: body.proactiveEnabled,
+      dailyMin: body.dailyMin as number,
+      dailyMax: body.dailyMax as number,
+      quietStartMinute: body.quietStartMinute,
+      quietEndMinute: body.quietEndMinute,
+      pausedUntil: body.pausedUntil,
+    }, now);
+    await audit(env.DB, ownerId, "update", "chat_preferences", String(ownerId), "ok", now);
+    return json(await getChatPreferences(env.DB, ownerId));
+  }
   if (path === "/api/app/memories" && request.method === "GET") {
     const query = url.searchParams.get("q");
     const category = url.searchParams.get("category");
@@ -150,6 +197,48 @@ async function route(
   if (path === "/api/app/episodes" && request.method === "GET") {
     const category = url.searchParams.get("category");
     return json(await listEpisodes(env.DB, ownerId, category === null ? undefined : category));
+  }
+  if (path === "/api/app/reply-memory-usage" && request.method === "GET") {
+    return json({ items: await listReplyMemoryUsage(env.DB, ownerId, 20) });
+  }
+  if (path === "/api/app/relationship-timeline" && request.method === "GET") {
+    return json({ items: await listRelationshipTimeline(env.DB, ownerId) });
+  }
+  const timelineMatch = path.match(/^\/api\/app\/relationship-timeline\/(\d+)$/u);
+  if (timelineMatch !== null && request.method === "PATCH") {
+    const id = asSafeId(timelineMatch[1] ?? "");
+    const body = await readJson(request);
+    if (body.value !== undefined && typeof body.value !== "string") throw new HttpError(400, "invalid_timeline_value");
+    if (body.control !== undefined && body.control !== "normal" && body.control !== "pinned" && body.control !== "ignored") {
+      throw new HttpError(400, "invalid_timeline_control");
+    }
+    const updated = await updateRelationshipTimelineItem(env.DB, ownerId, id, {
+      ...(typeof body.value === "string" ? { value: body.value } : {}),
+      ...(body.control === "normal" || body.control === "pinned" || body.control === "ignored"
+        ? { control: body.control } : {}),
+      now,
+    });
+    await audit(env.DB, ownerId, "update", "relationship_timeline", String(id), updated ? "ok" : "not_found", now);
+    return updated ? json({ ok: true }) : json({ error: "not_found" }, 404);
+  }
+  const controlMatch = path.match(/^\/api\/app\/memory-controls\/(fact|episode)\/(\d+)$/u);
+  if (controlMatch !== null && request.method === "PATCH") {
+    const kind = controlMatch[1] as MemoryEntityKind;
+    const entityId = asSafeId(controlMatch[2] ?? "");
+    const body = await readJson(request);
+    if (body.control !== "normal" && body.control !== "pinned" && body.control !== "ignored") {
+      throw new HttpError(400, "invalid_memory_control");
+    }
+    const updated = await setMemoryControl(
+      env.DB,
+      ownerId,
+      kind,
+      entityId,
+      body.control as MemoryControl,
+      now,
+    );
+    await audit(env.DB, ownerId, "update", "memory_control", `${kind}:${entityId}`, updated ? String(body.control) : "not_found", now);
+    return updated ? json({ ok: true }) : json({ error: "not_found" }, 404);
   }
   const memoryMatch = path.match(/^\/api\/app\/memories\/(\d+)$/u);
   if (memoryMatch !== null && request.method === "PATCH") {
@@ -190,7 +279,13 @@ async function route(
     const episodeId = asSafeId(episodeMatch[1] ?? "");
     const body = await readJson(request);
     if (!Number.isSafeInteger(body.expectedUpdatedAt)) throw new HttpError(400, "invalid_episode");
-    const deleted = await deleteEpisode(env.DB, ownerId, episodeId, body.expectedUpdatedAt as number, now);
+    const deleted = await deleteEpisode(
+      env.DB,
+      ownerId,
+      episodeId,
+      body.expectedUpdatedAt as number,
+      now,
+    );
     await audit(env.DB, ownerId, "delete", "episode", String(episodeId), deleted ? "ok" : "conflict", now);
     return deleted ? json({ ok: true }) : json({ error: "version_conflict" }, 409);
   }

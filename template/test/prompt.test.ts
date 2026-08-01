@@ -52,6 +52,7 @@ describe("Persona Bot prompt construction", () => {
       "[CURRENT_BEIJING_TIME]",
       "[RESPONSE_LENGTH]",
       "[HUMANIZER_STYLE]",
+      "[PRE_SEND_PERSONA_CHECK]",
       ...(hasImported ? ["[IMPORTED_PERSONA_REFERENCE_DATA]"] : []),
       "[RELEVANT_OWNER_MEMORY]",
       "[CONVERSATION_SUMMARY]",
@@ -87,8 +88,8 @@ describe("Persona Bot prompt construction", () => {
     expect(joined).toContain("[HUMANIZER_STYLE]");
     expect(joined).toContain("去掉AI腔和说明书腔");
     expect(joined).toContain("不要用模板化开头");
-    expect(joined).toContain("🌚 仅低频使用");
-    expect(joined).toContain("同一轮回复不要重复使用");
+    expect(joined).toContain("表情和口头习惯只按已导入的人格资料低频自然使用");
+    expect(joined).toContain("不额外创造固定表情");
   });
 
   it("drops oldest recent messages, then summary detail, then low-priority facts", () => {
@@ -156,7 +157,7 @@ describe("Persona Bot prompt construction", () => {
     });
 
     expect(result.totalChars).toBeGreaterThan(10);
-    expect(result.messages).toHaveLength(hasImported ? 11 : 10);
+    expect(result.messages).toHaveLength(hasImported ? 12 : 11);
     expect(result.messages.at(-1)?.content).toBe("必须保留的当前消息");
   });
 

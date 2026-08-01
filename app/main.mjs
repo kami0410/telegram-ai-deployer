@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerIpc } from "./ipc.mjs";
 import { runCommand } from "../lib/runner.mjs";
+import { createAutoUpdateController } from "../lib/auto-update.mjs";
 
 const appDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(appDirectory, "..");
@@ -32,6 +33,26 @@ function createWindow() {
   window.once("ready-to-show", () => window.show());
   void window.loadFile(path.join(appDirectory, "renderer", "index.html"));
   return window;
+}
+
+async function startAutoUpdates(window) {
+  if (!app.isPackaged || smokeTest || runtimeSmokeTest) return;
+  try {
+    const module = await import("electron-updater");
+    const updater = module.autoUpdater ?? module.default?.autoUpdater;
+    if (!updater) return;
+    createAutoUpdateController({
+      updater,
+      dialog,
+      notify: (status) => {
+        if (!window.isDestroyed()) window.webContents.send("update:status", status);
+      },
+    }).start({ isPackaged: true, smokeTest: false });
+  } catch {
+    if (!window.isDestroyed()) window.webContents.send("update:status", {
+      state: "error", message: "暂时无法检查更新，不影响继续使用。",
+    });
+  }
 }
 
 app.whenReady().then(async () => {
@@ -73,7 +94,8 @@ app.whenReady().then(async () => {
     ipcMain, dialog, shell, appRoot: runtimeRoot, templateRoot, legalRoot,
     nodeExecutable: process.execPath, runtimeEntry, wranglerCli, runtimeEnvironment,
   });
-  createWindow();
+  const window = createWindow();
+  void startAutoUpdates(window);
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

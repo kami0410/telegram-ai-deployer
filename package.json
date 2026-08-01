@@ -1,6 +1,6 @@
 {
   "name": "cloudflare-telegram-ai-bot-deployer",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Privacy-focused Windows deployment wizard for a Cloudflare Telegram AI bot.",
   "type": "module",
   "private": false,
@@ -28,7 +28,13 @@
     "directories": {
       "output": "dist"
     },
-    "publish": null,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kami0410",
+        "repo": "telegram-ai-deployer"
+      }
+    ],
     "files": [
       "app/**/*",
       "lib/**/*",
@@ -64,6 +70,7 @@
     }
   },
   "dependencies": {
+    "electron-updater": "6.8.9",
     "wrangler": "4.114.0"
   }
 }

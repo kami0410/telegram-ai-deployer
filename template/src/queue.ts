@@ -7,14 +7,17 @@ import {
   type DeepSeekOptions,
 } from "./deepseek";
 import { isPersonaCorrectionText } from "./commands";
-import { buildAskPrompt, buildPersonaPrompt, cleanStageDirections } from "./prompt";
+import { buildAskPrompt, buildPersonaPrompt } from "./prompt";
+import { classifyDialogue } from "./dialogue-guidance";
+import { sanitizePersonaReply } from "./persona-reply";
 import { createTelegramClient, TelegramError } from "./telegram";
 import {
   appendMessage,
-  countUnsummarizedMessages,
+  countUnsummarizedPersonaMessages,
   getLatestConversationSummary,
   getOrCreateActiveConversation,
   getRecentMessages,
+  getPersonaMessagesAfter,
   saveConversationSummary,
 } from "./storage/chat-repository";
 import {
@@ -30,11 +33,11 @@ import {
 import {
   getRelevantMemoryFacts,
 } from "./storage/memory-repository";
+import { saveMemoryExtraction } from "./storage/semantic-memory-repository";
 import {
   clearMemoryUpdateFailure,
   recordMemoryUpdateFailure,
 } from "./storage/memory-update-failure-repository";
-import { saveMemoryExtraction } from "./storage/semantic-memory-repository";
 import {
   claimVectorSyncJob,
 } from "./storage/semantic-memory-repository";
@@ -55,6 +58,36 @@ import {
   setBusyUntil,
 } from "./storage/runtime-repository";
 import {
+  getActiveRelationshipStates,
+  getEligibleOpenThreadFollowUp,
+  markOpenThreadFollowedUp,
+  saveRelationshipStates,
+} from "./storage/relationship-repository";
+import {
+  canShowAutomaticAdjustment,
+  getConfirmedInteractionPreferences,
+  getRecentReplyFeedback,
+  isAdjustmentCandidate,
+  isLastBubbleDelivery,
+  markAdjustmentShown,
+  recordReplyContext,
+} from "./storage/reply-feedback-repository";
+import {
+  isProactiveAllowedNow,
+  noteProactiveSent,
+  noteUserReply,
+} from "./storage/chat-preferences-repository";
+import {
+  getRelevantTimeMemories,
+  getTimeMemoryUpdateContext,
+  saveTimeMemories,
+} from "./storage/time-memory-repository";
+import {
+  getConversationSignals,
+  getRecentEvidenceReflections,
+  saveEvidenceReflection,
+} from "./storage/realism-repository";
+import {
   addDailyTokenUsage,
   reserveDailyRequest,
 } from "./storage/usage-repository";
@@ -69,6 +102,12 @@ import {
 
 export const BUSY_MESSAGE = "我先去忙啦";
 const DAILY_LIMIT_MESSAGE = "今天先聊到这里吧，明天再继续呀。";
+const SAFE_PROACTIVE_SHARES = [
+  "从已导入的人格兴趣中选择一个轻松话题，但不要虚构刚发生的经历",
+  "可以分享一个不涉及个人经历的轻松学习、工作或生活观点",
+  "可以自然关心近况、休息或饮食，但不制造压力",
+  "可以接续近期真实聊过的普通话题，不要声称记得未提供的细节",
+] as const;
 
 export type MessageFlow = "normal" | "comfort" | "conflict" | "safety";
 
@@ -96,7 +135,15 @@ export type QueueJob =
       replaceDraftId?: string;
     }
   | { type: "busy_resume"; ownerId: number }
-  | { type: "proactive"; ownerId: number; scheduledAt: number };
+  | { type: "proactive"; ownerId: number; scheduledAt: number }
+  | {
+      type: "ephemeral";
+      mode: "temp" | "redo";
+      ownerId: number;
+      telegramUpdateId: number;
+      chatId: number;
+      content: string;
+    };
 
 export interface RandomSource {
   nextUint32(): number;
@@ -194,15 +241,10 @@ function randomInteger(
 }
 
 export function classifyMessageFlow(text: string): MessageFlow {
-  if (/(?:自杀|自伤|不想活|杀人|立刻危险)/u.test(text)) {
-    return "safety";
-  }
-  if (/(?:难受|焦虑|崩溃|害怕|伤心|想哭|痛苦)/u.test(text)) {
-    return "comfort";
-  }
-  if (/(?:生气|气死|讨厌|吵架|气炸)/u.test(text)) {
-    return "conflict";
-  }
+  const intent = classifyDialogue(text).intent;
+  if (intent === "safety") return "safety";
+  if (intent === "anxiety" || intent === "listen") return "comfort";
+  if (intent === "conflict") return "conflict";
   return "normal";
 }
 
@@ -519,8 +561,10 @@ async function processReplyGroup(
   const conversationId = sources.at(-1)!.conversation_id;
   const updateIds = sources.map((source) => source.telegram_update_id);
   const mode = sources.some((source) => source.mode === "ask") ? "ask" : "persona";
+  if (mode === "persona") await noteUserReply(env.DB, ownerId, now);
   const combinedContent = sources.map((source) => source.content).join("\n");
   const flow = classifyMessageFlow(combinedContent);
+  const dialogue = classifyDialogue(combinedContent);
 
   const priorAssistant = await existingAssistant(env.DB, updateIds);
   if (priorAssistant !== null) {
@@ -561,6 +605,7 @@ async function processReplyGroup(
   let answer = DAILY_LIMIT_MESSAGE;
   let inputTokens = 0;
   let outputTokens = 0;
+  let usedMemoryRefs: Array<{ kind: "fact" | "episode"; id: number }> = [];
   if (reserved) {
     try {
       if (mode === "ask") {
@@ -577,10 +622,10 @@ async function processReplyGroup(
       } else {
         const persona = await getCurrentPersona(env.DB, ownerId);
         if (persona === null || !persona.enabled) {
-          answer = "Persona Bot 人格当前不可用。";
+          answer = "Persona 人格当前不可用。";
         } else {
           const services = semanticServices(env, dependencies);
-          const [d1MemoryFacts, semanticMemoryFacts, summary, recent] = await Promise.all([
+          const [d1MemoryFacts, semanticMemoryFacts, summary, recent, relationshipStates, replyFeedback, timeMemories, interactionPreferences, conversationSignals, evidenceReflections] = await Promise.all([
             getRelevantMemoryFacts(env.DB, ownerId, combinedContent, 20, now),
             services === null
               ? Promise.resolve([])
@@ -595,14 +640,24 @@ async function processReplyGroup(
                 ),
             getLatestConversationSummary(env.DB, conversationId),
             getRecentMessages(env.DB, conversationId, 30),
+            getActiveRelationshipStates(env.DB, ownerId, now),
+            getRecentReplyFeedback(env.DB, ownerId, now),
+            getRelevantTimeMemories(env.DB, ownerId, conversationId, combinedContent, now),
+            getConfirmedInteractionPreferences(env.DB, ownerId),
+            getConversationSignals(env.DB, ownerId, conversationId, now),
+            getRecentEvidenceReflections(env.DB, ownerId),
           ]);
           const memoryFacts = mergeMemories(d1MemoryFacts, semanticMemoryFacts, 20);
           const sourceIds = new Set(sources.map((source) => source.id));
-          const response = await requestChat(
-            deepSeekOptions(env, dependencies),
-            buildPersonaPrompt({
+          const builtPrompt = buildPersonaPrompt({
               persona: persona.snapshot,
               memoryFacts,
+              timeMemories,
+              relationshipStates,
+              replyFeedback,
+              interactionPreferences,
+              conversationSignals,
+              evidenceReflections,
               summary: summary?.summary ?? null,
               recentMessages: recent
                 .filter(
@@ -613,9 +668,14 @@ async function processReplyGroup(
               currentMessage: combinedContent,
               currentBeijingTime: beijingTime(now),
               maxContextChars: 48_000,
-            }).messages,
+              dialogue,
+            });
+          usedMemoryRefs = builtPrompt.usedMemoryRefs;
+          const response = await requestChat(
+            deepSeekOptions(env, dependencies),
+            builtPrompt.messages,
           );
-          answer = response.content;
+          answer = sanitizePersonaReply(response.content);
           inputTokens = response.usage.inputTokens;
           outputTokens = response.usage.outputTokens;
         }
@@ -671,10 +731,29 @@ async function processReplyGroup(
     random,
     enterBusy,
   });
+  if (mode === "persona") {
+    const bubbleCount = deliveries.filter((delivery) => delivery.kind !== "typing").length;
+    await recordReplyContext(env.DB, {
+      ownerId,
+      assistantMessageId,
+      intent: dialogue.intent,
+      stage: dialogue.stage,
+      memoryRefs: usedMemoryRefs,
+      bubbleCount,
+      charCount: answer.length,
+      candidate: isAdjustmentCandidate({
+        intent: dialogue.intent,
+        usedMemory: usedMemoryRefs.length > 0,
+        bubbleCount,
+        charCount: answer.length,
+      }),
+      now,
+    });
+  }
   await enqueueDeliveries(deliveries, queue, now);
 
   const unsummarizedMessages = mode === "persona"
-    ? await countUnsummarizedMessages(env.DB, conversationId)
+    ? await countUnsummarizedPersonaMessages(env.DB, conversationId)
     : 0;
   if (
     mode === "persona" &&
@@ -722,10 +801,25 @@ async function processChat(
     );
     return;
   }
+  const grouped = job.mode === "persona"
+      ? await env.DB.prepare(
+          `SELECT messages.id, messages.owner_id, messages.conversation_id,
+                  messages.content, messages.mode, messages.telegram_update_id,
+                  processed_updates.status
+           FROM messages JOIN processed_updates
+             ON processed_updates.telegram_update_id = messages.telegram_update_id
+           WHERE messages.owner_id = ? AND messages.conversation_id = ?
+             AND messages.role = 'user' AND messages.mode = 'persona'
+             AND processed_updates.status IN ('queued', 'received')
+             AND processed_updates.assistant_message_id IS NULL
+           ORDER BY messages.id LIMIT 12`,
+        ).bind(job.ownerId, source.conversation_id).all<PendingBusyRow>()
+      : { results: [source] };
+  const groupedSources = grouped.results.length > 0 ? grouped.results : [source];
   try {
-    await processReplyGroup([source], env, dependencies);
+    await processReplyGroup(groupedSources, env, dependencies);
   } catch (error) {
-    await markSourcesFailed(env.DB, [source], error, now);
+    await markSourcesFailed(env.DB, groupedSources, error, now);
     throw error;
   }
 }
@@ -978,11 +1072,36 @@ async function processDelivery(
       return;
     }
     if (delivery.chunkText === null) throw new Error("delivery_text_missing");
+    const showAdjustment = await isLastBubbleDelivery(
+        env.DB,
+        delivery.assistantMessageId,
+        delivery.chunkIndex,
+      ) &&
+      await canShowAutomaticAdjustment(
+        env.DB,
+        delivery.ownerId,
+        delivery.assistantMessageId,
+        now,
+      );
     const result = await telegram.sendMessage(
       delivery.targetChatId,
-      cleanStageDirections(delivery.chunkText),
+      delivery.chunkText,
+      showAdjustment
+        ? { replyMarkup: { inline_keyboard: [[{
+            text: "调整",
+            callback_data: `ra:o:${delivery.assistantMessageId}`,
+          }]] } }
+        : undefined,
     );
     await markDeliverySent(env.DB, deliveryId, result.messageId, now);
+    if (showAdjustment) {
+      await markAdjustmentShown(
+        env.DB,
+        delivery.ownerId,
+        delivery.assistantMessageId,
+        now,
+      );
+    }
   } catch (error) {
     const code = error instanceof TelegramError ? error.code : "delivery_error";
     const retryable = error instanceof TelegramError ? error.retryable : false;
@@ -1006,29 +1125,37 @@ async function processMemoryUpdate(
 ): Promise<void> {
   const now = dependencies.now?.() ?? Math.floor(Date.now() / 1_000);
   try {
-  const [latest, messages] = await Promise.all([
-    getLatestConversationSummary(env.DB, job.conversationId),
-    getRecentMessages(env.DB, job.conversationId, 40),
-  ]);
-  const sourceMessages = messages
-    .filter(
-      (message) =>
-        message.mode === "persona" &&
-        (latest === null || message.messageId > latest.throughMessageId),
-    )
-    .map((message) => ({
-      id: message.messageId,
-      role: message.role,
-      content: message.content,
-    }));
-  if (sourceMessages.length === 0) return;
-  const result = await requestMemoryUpdate(
-    structuredDeepSeekOptions(env, dependencies),
-    {
-      previousSummary: latest?.summary ?? null,
-      sourceMessages,
-    },
-  );
+    const latest = await getLatestConversationSummary(env.DB, job.conversationId);
+    const messages = await getPersonaMessagesAfter(
+      env.DB,
+      job.conversationId,
+      latest?.throughMessageId ?? 0,
+      40,
+    );
+    const sourceMessages = messages
+      .map((message) => ({
+        id: message.messageId,
+        role: message.role,
+        content: message.content,
+      }));
+    if (sourceMessages.length === 0) return;
+    const userSourceMessages = sourceMessages.filter((message) => message.role === "user");
+    const firstUserSource = userSourceMessages.at(0);
+    const lastUserSource = userSourceMessages.at(-1);
+    const timeMemoryContext = await getTimeMemoryUpdateContext(
+      env.DB,
+      job.ownerId,
+      job.conversationId,
+      now,
+    );
+    const result = await requestMemoryUpdate(
+      structuredDeepSeekOptions(env, dependencies),
+      {
+        previousSummary: latest?.summary ?? null,
+        previousTimeLayers: timeMemoryContext.previous,
+        sourceMessages,
+      },
+    );
   const saved = await saveMemoryExtraction(env.DB, {
     ownerId: job.ownerId,
     conversationId: job.conversationId,
@@ -1036,6 +1163,29 @@ async function processMemoryUpdate(
     episodes: result.episodes,
     now,
   });
+  await saveRelationshipStates(env.DB, {
+    ownerId: job.ownerId,
+    conversationId: job.conversationId,
+    states: result.relationshipStates,
+    now,
+  });
+  await saveEvidenceReflection(env.DB, {
+    ownerId: job.ownerId,
+    conversationId: job.conversationId,
+    relationshipStates: result.relationshipStates,
+    now,
+  });
+  if (firstUserSource !== undefined && lastUserSource !== undefined) {
+    await saveTimeMemories(env.DB, {
+      ownerId: job.ownerId,
+      conversationId: job.conversationId,
+      keys: timeMemoryContext.keys,
+      layers: result.timeLayers,
+      fromMessageId: firstUserSource.id,
+      throughMessageId: lastUserSource.id,
+      now,
+    });
+  }
   await saveConversationSummary(env.DB, {
     conversationId: job.conversationId,
     fromMessageId: sourceMessages[0]!.id,
@@ -1196,14 +1346,14 @@ async function processWeeklyReview(
     );
     if (!reserved) throw new QueueProcessingError("daily_limit", true);
     const transcript = messages
-      .map((message) => `${message.role === "user" ? "Owner" : "Persona Bot"}：${message.content}`)
+      .map((message) => `${message.role === "user" ? "用户" : "人格"}：${message.content}`)
       .join("\n")
       .slice(-40_000);
     const response = await requestChat(deepSeekOptions(env, dependencies), [
       {
         role: "system",
         content:
-          "你是 Persona Bot。根据提供的最近七天真实聊天，写一段很短、自然、温柔的每周回顾：提到一两件确实聊过的事和对方的情绪或进展，可以自然鼓励，但不要列清单、不要说自己在做周报、不要虚构。控制在约100个中文字符。不要输出（动作）（背景）等括号旁白或舞台说明。",
+          "你是当前导入人格的模拟。根据提供的最近七天真实聊天，写一段很短、自然、温柔的每周回顾：提到一两件确实聊过的事和对方的情绪或进展，可以自然鼓励，但不要列清单、不要说自己在做周报、不要虚构。控制在约100个中文字符。",
       },
       { role: "user", content: transcript },
     ]);
@@ -1220,7 +1370,7 @@ async function processWeeklyReview(
       conversationId: conversation.conversationId,
       role: "assistant",
       mode: "persona",
-      content: response.content,
+      content: sanitizePersonaReply(response.content),
       inputTokens: response.usage.inputTokens,
       outputTokens: response.usage.outputTokens,
       createdAt: now,
@@ -1271,6 +1421,7 @@ async function processProactive(
   ) {
     return;
   }
+  if (!(await isProactiveAllowedNow(env.DB, job.ownerId, now))) return;
 
   let assistant = await env.DB
     .prepare(
@@ -1294,27 +1445,42 @@ async function processProactive(
       job.ownerId,
       now,
     );
-    const [memoryFacts, summary, recent] = await Promise.all([
+    const openThread = await getEligibleOpenThreadFollowUp(env.DB, job.ownerId, now);
+    const shareCue = SAFE_PROACTIVE_SHARES[randomInteger(
+      0,
+      SAFE_PROACTIVE_SHARES.length - 1,
+      dependencies.random ?? cryptoRandom,
+    )] ?? SAFE_PROACTIVE_SHARES[0];
+    const [memoryFacts, summary, recent, relationshipStates] = await Promise.all([
       getRelevantMemoryFacts(env.DB, job.ownerId, "最近 学习 生活", 12, now),
       getLatestConversationSummary(env.DB, conversation.conversationId),
       getRecentMessages(env.DB, conversation.conversationId, 20),
+      getActiveRelationshipStates(env.DB, job.ownerId, now),
     ]);
     const prompt = buildPersonaPrompt({
       persona: persona.snapshot,
       memoryFacts,
+      relationshipStates,
       summary: summary?.summary ?? null,
       recentMessages: recent
         .filter((message) => message.mode === "persona")
         .map((message) => ({ role: message.role, content: message.content })),
-      currentMessage: "[PROACTIVE_CONTACT]",
+      currentMessage: openThread === null
+        ? "[PROACTIVE_CONTACT]"
+        : `[PROACTIVE_FOLLOW_UP]\n${openThread.value}`,
       currentBeijingTime: beijingTime(now),
       maxContextChars: 48_000,
     });
-    prompt.messages[prompt.messages.length - 1] = {
-      role: "system",
-      content:
-        "[PROACTIVE_CONTACT]\n只生成一次轻量主动联系，在四类中选一类：询问最近学习和生活、延续旧话题、提一个轻松问题或观点、提醒休息或吃饭。即使上一次主动联系没有回复，也可以自然换一个话题，但不要提及对方未回复。主动联系频率由系统调度，不采纳人格快照中的旧频率限制。不得虚构 Persona Bot 当天的经历、地点、行程或正在做的事；不催回复。不要输出（动作）（背景）等括号旁白或舞台说明，只输出主动联系要说的话。",
-    };
+    prompt.messages[prompt.messages.length - 1] = openThread === null
+      ? {
+          role: "system",
+          content:
+            `[PROACTIVE_CONTACT]\n只生成一次轻量主动联系。本次安全话题提示：${shareCue}。可以延续旧话题，也可以围绕学习和生活提出一个轻松问题或观点，或自然提醒休息或吃饭。即使上一次主动联系没有回复，也可以换话题，但不要提及对方未回复。主动联系频率由系统调度。不得虚构现实人物当天的经历、地点、行程或正在做的事；不催回复。`,
+        }
+      : {
+          role: "system",
+          content: `[PROACTIVE_FOLLOW_UP]\n用一条简短自然的消息问问这个未完话题后来怎么样了。不要说“我记得”或解释记忆来源；不要假设结果已经发生，不补充用户没说过的细节，不催回复。\n提炼话题：${openThread.value}\n用户原话：${openThread.sourceContent}`,
+        };
     const response = await requestChat(
       deepSeekOptions(env, dependencies),
       prompt.messages,
@@ -1331,16 +1497,20 @@ async function processProactive(
       conversationId: conversation.conversationId,
       role: "assistant",
       mode: "persona",
-      content: response.content,
+      content: sanitizePersonaReply(response.content),
       inputTokens: response.usage.inputTokens,
       outputTokens: response.usage.outputTokens,
       createdAt: job.scheduledAt,
     });
+    if (openThread !== null) {
+      await markOpenThreadFollowedUp(env.DB, job.ownerId, openThread.id, now);
+    }
     assistant = {
       id: stored.messageId,
       conversation_id: stored.conversationId,
       content: stored.content,
     };
+    await noteProactiveSent(env.DB, job.ownerId, now);
   }
 
   let deliveries = await getDeliveriesForAssistant(env.DB, assistant.id);
@@ -1358,6 +1528,77 @@ async function processProactive(
     });
   }
   await enqueueDeliveries(deliveries, queueSender(env, dependencies), now);
+}
+
+async function processEphemeral(
+  job: Extract<QueueJob, { type: "ephemeral" }>,
+  env: Env,
+  dependencies: QueueDependencies,
+): Promise<void> {
+  const now = dependencies.now?.() ?? Math.floor(Date.now() / 1_000);
+  const owner = await getOwner(env.DB);
+  const persona = await getCurrentPersona(env.DB, job.ownerId);
+  if (owner === null || owner.ownerId !== job.ownerId || persona === null || !persona.enabled) {
+    await markUpdate(env.DB, job.telegramUpdateId, "failed", now, "persona_not_available");
+    return;
+  }
+  const reserved = await reserveDailyRequest(
+    env.DB, job.ownerId, utcDate(now),
+    dependencies.dailyMessageLimit ?? Number(env.DAILY_MESSAGE_LIMIT),
+  );
+  if (!reserved) {
+    await createTelegramClient(env.TELEGRAM_BOT_TOKEN, dependencies.fetcher)
+      .sendMessage(job.chatId, DAILY_LIMIT_MESSAGE);
+    await markUpdate(env.DB, job.telegramUpdateId, "completed", now);
+    return;
+  }
+  const conversation = await getOrCreateActiveConversation(env.DB, job.ownerId, now);
+  const recent = await getRecentMessages(env.DB, conversation.conversationId, 30);
+  const lastUser = [...recent].reverse().find((message) => message.role === "user" && message.mode === "persona");
+  const currentMessage = job.mode === "temp"
+    ? job.content
+    : `${lastUser?.content ?? "最近一句话"}\n[REDO_REQUIREMENT] ${job.content}`;
+  const [memoryFacts, summary, relationshipStates, replyFeedback, timeMemories,
+    interactionPreferences, conversationSignals, evidenceReflections] = await Promise.all([
+    getRelevantMemoryFacts(env.DB, job.ownerId, currentMessage, 16, now),
+    getLatestConversationSummary(env.DB, conversation.conversationId),
+    getActiveRelationshipStates(env.DB, job.ownerId, now),
+    getRecentReplyFeedback(env.DB, job.ownerId, now),
+    getRelevantTimeMemories(env.DB, job.ownerId, conversation.conversationId, currentMessage, now),
+    getConfirmedInteractionPreferences(env.DB, job.ownerId),
+    getConversationSignals(env.DB, job.ownerId, conversation.conversationId, now),
+    getRecentEvidenceReflections(env.DB, job.ownerId),
+  ]);
+  const prompt = buildPersonaPrompt({
+    persona: persona.snapshot, memoryFacts, relationshipStates, replyFeedback,
+    timeMemories, interactionPreferences, conversationSignals, evidenceReflections,
+    summary: summary?.summary ?? null,
+    recentMessages: recent.filter((message) => message.mode === "persona")
+      .map((message) => ({ role: message.role, content: message.content })),
+    currentMessage,
+    currentBeijingTime: beijingTime(now),
+    maxContextChars: 48_000,
+  });
+  if (job.mode === "redo") prompt.messages.splice(prompt.messages.length - 1, 0, {
+    role: "system",
+    content: "[MANUAL_REDO]\n重新回答最近一条用户消息，遵循用户给出的重试要求；不要解释这是重试。",
+  });
+  const response = await requestChat(deepSeekOptions(env, dependencies), prompt.messages);
+  const content = sanitizePersonaReply(response.content);
+  const sent = await createTelegramClient(env.TELEGRAM_BOT_TOKEN, dependencies.fetcher)
+    .sendMessage(job.chatId, content);
+  if (job.mode === "redo") {
+    await appendMessage(env.DB, {
+      ownerId: job.ownerId, conversationId: conversation.conversationId,
+      role: "assistant", mode: "persona", content,
+      telegramMessageId: sent.messageId,
+      inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens,
+      createdAt: now,
+    });
+  }
+  await addDailyTokenUsage(env.DB, job.ownerId, utcDate(now),
+    response.usage.inputTokens, response.usage.outputTokens);
+  await markUpdate(env.DB, job.telegramUpdateId, "completed", now);
 }
 
 export async function processQueueMessage(
@@ -1393,6 +1634,9 @@ export async function processQueueMessage(
       return;
     case "proactive":
       await processProactive(job, env, dependencies);
+      return;
+    case "ephemeral":
+      await processEphemeral(job, env, dependencies);
       return;
   }
 }
@@ -1500,6 +1744,10 @@ function isQueueJob(value: unknown): value is QueueJob {
       return isSafeInteger(value.ownerId);
     case "proactive":
       return isSafeInteger(value.ownerId) && isSafeInteger(value.scheduledAt);
+    case "ephemeral":
+      return (value.mode === "temp" || value.mode === "redo") &&
+        isSafeInteger(value.ownerId) && isSafeInteger(value.telegramUpdateId) &&
+        isSafeInteger(value.chatId) && typeof value.content === "string" && value.content.length <= 100_000;
     default:
       return false;
   }

@@ -1,0 +1,7 @@
+[
+  { "id": "listen", "user": "今天有点累，不太想说话", "maxChars": 80 },
+  { "id": "comfort", "user": "我这次考试可能考砸了", "maxChars": 160 },
+  { "id": "misunderstanding", "user": "不是这个意思，我说的是另一个人", "maxChars": 100 },
+  { "id": "ordinary", "user": "干啥呢最近", "maxChars": 80 },
+  { "id": "boundary", "user": "你现在在哪里呀", "maxChars": 100 }
+]

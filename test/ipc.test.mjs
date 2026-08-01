@@ -18,6 +18,7 @@ test("preload exposes only the approved frozen deployment API", () => {
     "cancel",
     "checkEnvironment",
     "onProgress",
+    "onUpdateStatus",
     "openOutputFolder",
     "readDisclaimer",
     "resume",
@@ -68,6 +69,7 @@ test("packaged-compatible CommonJS preload exposes the deployment API", async ()
   assert.equal(typeof exposedApi?.selectPersona, "function");
   assert.equal(typeof exposedApi?.checkEnvironment, "function");
   assert.equal(typeof exposedApi?.onProgress, "function");
+  assert.equal(typeof exposedApi?.onUpdateStatus, "function");
   assert.equal(Object.isFrozen(exposedApi), true);
 });
 

@@ -22,19 +22,23 @@ import {
   type ReminderWorkflowBinding,
 } from "./reminders";
 import { listPendingReminders } from "./storage/reminder-repository";
+import { getLatestAdjustableReply } from "./storage/reply-feedback-repository";
 
 export const CONFIRM_FORGET_CURRENT = "确认忘记当前话题";
 export const CONFIRM_FORGET_ALL = "确认删除全部聊天记忆";
-export const CONFIRM_PERSONA_DELETE = "确认删除 Persona Bot 人格";
+export const CONFIRM_PERSONA_DELETE = "确认删除 Persona 人格";
 export const CONFIRM_PERSONA_CORRECTION = "确认修正";
 export const CONFIRM_PERSONA_ADDITION = "确认新增";
 
-const HELP_TEXT = `Persona Bot 命令帮助
+const HELP_TEXT = `Persona 命令帮助
 
 日常聊天
 /new — 开始新话题
 /ask <问题> — 独立知识问答
 /usage — 查看今日模型用量
+/adjust — 调整最近一次 Persona 回复
+/temp <内容> — 一次性无记忆聊天
+/redo [要求] — 重新回答最近一句
 
 记忆管理
 /memory — 查看长期记忆
@@ -46,7 +50,7 @@ const HELP_TEXT = `Persona Bot 命令帮助
 /persona-history — 查看人格版本历史
 /persona-rollback <版本号> — 基于旧版本创建回滚版本
 /persona-export — 导出当前人格
-/persona-delete — 删除 Persona Bot 人格及版本
+/persona-delete — 删除 Persona 人格及版本
 
 账号与面板
 /settings — 打开管理面板
@@ -65,7 +69,8 @@ export interface ParsedCommand {
 export interface OwnerCommandResult {
   handled: boolean;
   messages: string[];
-  enqueue?: { mode: "ask" | "persona_addition"; content: string };
+  enqueue?: { mode: "ask" | "persona_addition" | "temp" | "redo"; content: string };
+  adjustAssistantMessageId?: number;
 }
 
 export interface OwnerCommandInput {
@@ -101,7 +106,7 @@ interface PersonaDraftRow {
 }
 
 export function isPersonaCorrectionText(text: string): boolean {
-  return /(?:她不会这样|Persona Bot\s*应该会|她应该会)/iu.test(text);
+  return /(?:她不会这样|Persona\s*应该会|她应该会)/iu.test(text);
 }
 
 function utcDate(epochSeconds: number): string {
@@ -206,6 +211,10 @@ async function forgetCurrentConversation(
          WHERE owner_id = ? AND source_conversation_id = ?`,
       )
       .bind(ownerId, current.id),
+    db.prepare("DELETE FROM memory_time_layers WHERE owner_id = ? AND source_conversation_id = ?")
+      .bind(ownerId, current.id),
+    db.prepare("DELETE FROM interaction_reflections WHERE owner_id = ? AND conversation_id = ?")
+      .bind(ownerId, current.id),
     db
       .prepare("DELETE FROM conversations WHERE id = ? AND owner_id = ?")
       .bind(current.id, ownerId),
@@ -215,7 +224,7 @@ async function forgetCurrentConversation(
   ]);
   if (
     !results.every((result) => result.success) ||
-    (results[2]?.meta.changes ?? 0) < 1
+    (results[4]?.meta.changes ?? 0) < 1
   ) {
     throw new Error("forget_current_failed");
   }
@@ -245,6 +254,12 @@ async function forgetAllChatData(
     "DELETE FROM usage_daily WHERE owner_id = ?",
     "DELETE FROM memory_facts WHERE owner_id = ?",
     "DELETE FROM memory_episodes WHERE owner_id = ?",
+    "DELETE FROM memory_time_layers WHERE owner_id = ?",
+    "DELETE FROM relationship_states WHERE owner_id = ?",
+    "DELETE FROM interaction_reflections WHERE owner_id = ?",
+    "DELETE FROM reply_feedback WHERE owner_id = ?",
+    "DELETE FROM interaction_preference_drafts WHERE owner_id = ?",
+    "DELETE FROM interaction_preferences WHERE owner_id = ?",
     "DELETE FROM conversations WHERE owner_id = ?",
   ].map((sql) => db.prepare(sql).bind(ownerId));
   const results = await db.batch(statements);
@@ -328,7 +343,7 @@ async function handlePersonaVersionConfirmation(
       return {
         handled: true,
         messages: [
-          `已创建 Persona Bot 人格 v${result.persona.version}：${draft.summary}`,
+          `已创建 Persona 人格 v${result.persona.version}：${draft.summary}`,
         ],
       };
     }
@@ -446,6 +461,26 @@ export async function handleOwnerCommand(
         ],
       };
     }
+    case "adjust": {
+      const latest = await getLatestAdjustableReply(input.db, input.owner.ownerId);
+      return latest === null
+        ? { handled: true, messages: ["还没有可以调整的 Persona 回复。"] }
+        : {
+            handled: true,
+            messages: ["调整最近一次 Persona 回复："],
+            adjustAssistantMessageId: latest.assistantMessageId,
+          };
+    }
+    case "temp":
+      return command.argument.length === 0
+        ? { handled: true, messages: ["用法：/temp <本次不保存的内容>\nTelegram 客户端自身仍可能保留消息。"] }
+        : { handled: true, messages: [], enqueue: { mode: "temp", content: command.argument } };
+    case "redo":
+      return {
+        handled: true,
+        messages: [],
+        enqueue: { mode: "redo", content: command.argument || "更像她、更加自然地重新回复" },
+      };
     case "remind": {
       if (command.argument.length === 0 || input.reminderWorkflow === undefined) {
         return {
@@ -515,7 +550,7 @@ export async function handleOwnerCommand(
           };
     case "persona-add":
       return command.argument.length === 0
-        ? { handled: true, messages: ["用法：/persona-add <Persona Bot 后来明确表达的新事实>"] }
+        ? { handled: true, messages: ["用法：/persona-add <Persona 后来明确表达的新事实>"] }
         : {
             handled: true,
             messages: [],
@@ -536,7 +571,7 @@ export async function handleOwnerCommand(
         handled: true,
         messages: [
           events.results.length === 0
-            ? "没有 Persona Bot 人格版本。"
+            ? "没有 Persona 人格版本。"
             : events.results
                 .map(
                   (event) =>
@@ -576,9 +611,9 @@ export async function handleOwnerCommand(
         handled: true,
         messages:
           persona === null
-            ? ["没有 Persona Bot 人格可导出。"]
+            ? ["没有 Persona 人格可导出。"]
             : [
-                `Persona Bot persona v${persona.version}\n${canonicalPersonaJson(persona.snapshot)}`,
+                `Persona persona v${persona.version}\n${canonicalPersonaJson(persona.snapshot)}`,
               ],
       };
     }
@@ -593,7 +628,7 @@ export async function handleOwnerCommand(
         return {
           handled: true,
           messages: [
-            `这会删除全部聊天、摘要、长期聊天记忆和用量记录，但保留账号、恢复钥匙和 Persona Bot 人格。请发送“${CONFIRM_FORGET_ALL}”确认。`,
+            `这会删除全部聊天、摘要、长期聊天记忆和用量记录，但保留账号、恢复钥匙和 Persona 人格。请发送“${CONFIRM_FORGET_ALL}”确认。`,
           ],
         };
       }
@@ -622,7 +657,7 @@ export async function handleOwnerCommand(
       return {
         handled: true,
         messages: [
-          `这会删除 Persona Bot 人格、所有版本和主动联系状态，但不会删除聊天或长期聊天记忆。请发送“${CONFIRM_PERSONA_DELETE}”确认。`,
+          `这会删除 Persona 人格、所有版本和主动联系状态，但不会删除聊天或长期聊天记忆。请发送“${CONFIRM_PERSONA_DELETE}”确认。`,
         ],
       };
     default:

@@ -210,6 +210,28 @@ export async function getRecentMessages(
   return result.results.reverse().map(toMessage);
 }
 
+export async function getPersonaMessagesAfter(
+  db: D1Database,
+  conversationId: number,
+  afterMessageId: number,
+  limit: number,
+): Promise<StoredMessage[]> {
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+  const result = await db
+    .prepare(
+      `SELECT id, owner_id, conversation_id, role, mode, content,
+              telegram_message_id, telegram_update_id,
+              input_tokens, output_tokens, created_at
+       FROM messages
+       WHERE conversation_id = ? AND mode = 'persona' AND id > ?
+       ORDER BY id ASC
+       LIMIT ?`,
+    )
+    .bind(conversationId, afterMessageId, safeLimit)
+    .all<MessageRow>();
+  return result.results.map(toMessage);
+}
+
 export async function saveConversationSummary(
   db: D1Database,
   input: {
@@ -277,7 +299,7 @@ export async function getLatestConversationSummary(
   return row === null ? null : toSummary(row);
 }
 
-export async function countUnsummarizedMessages(
+export async function countUnsummarizedPersonaMessages(
   db: D1Database,
   conversationId: number,
 ): Promise<number> {
@@ -297,6 +319,8 @@ export async function countUnsummarizedMessages(
     .first<{ count: number }>();
   return row?.count ?? 0;
 }
+
+export const countUnsummarizedMessages = countUnsummarizedPersonaMessages;
 
 export async function closeActiveConversation(
   db: D1Database,

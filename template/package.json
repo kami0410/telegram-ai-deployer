@@ -7,6 +7,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:backup": "node tools/persona-backup.selftest.mjs",
+    "evaluate:realism": "node tools/persona-realism-evaluator.mjs",
     "backup": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/persona-backup.ps1 -Mode backup",
     "typecheck": "tsc --noEmit",
     "cf:types": "wrangler types --env-file config/type-bindings.env --strict-vars false",

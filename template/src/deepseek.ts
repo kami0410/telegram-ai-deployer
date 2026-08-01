@@ -271,26 +271,59 @@ export interface ExtractedMemoryEpisode {
   sourceMessageId: number;
 }
 
+export type ExtractedRelationshipStateKind =
+  | "open_thread"
+  | "emotional_state"
+  | "commitment"
+  | "shared_moment"
+  | "interaction_outcome";
+
+export interface ExtractedRelationshipState {
+  kind: ExtractedRelationshipStateKind;
+  value: string;
+  sourceMessageId: number;
+}
+
+export type ExtractedTimeMemoryLayerKind = "topic" | "week" | "month" | "relationship";
+
+export interface ExtractedTimeMemoryLayer {
+  layer: ExtractedTimeMemoryLayerKind;
+  summary: string;
+  topics: string[];
+  importance: number;
+}
+
 export interface MemoryUpdateResult {
   summary: string;
   throughMessageId: number;
   stableFacts: ExtractedMemoryFact[];
   episodes: ExtractedMemoryEpisode[];
+  relationshipStates: ExtractedRelationshipState[];
+  timeLayers: ExtractedTimeMemoryLayer[];
   usage: DeepSeekUsage;
 }
 
 export interface MemoryUpdateInput {
   previousSummary: string | null;
+  previousTimeLayers?: Array<{
+    layer: ExtractedTimeMemoryLayerKind;
+    periodKey: string;
+    summary: string;
+  }>;
   sourceMessages: MemorySourceMessage[];
 }
 
 function extractJsonObject(content: string): string {
   const trimmed = content.trim();
   const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/iu.exec(trimmed)?.[1];
-  if (fenced) return fenced;
+  if (fenced) {
+    return fenced;
+  }
   const firstBrace = trimmed.indexOf("{");
   const lastBrace = trimmed.lastIndexOf("}");
-  return firstBrace >= 0 && lastBrace > firstBrace ? trimmed.slice(firstBrace, lastBrace + 1) : trimmed;
+  return firstBrace >= 0 && lastBrace > firstBrace
+    ? trimmed.slice(firstBrace, lastBrace + 1)
+    : trimmed;
 }
 
 function normalizeCategory(value: unknown): MemoryCategory {
@@ -305,7 +338,8 @@ function normalizeFactKey(value: unknown, sourceMessageId: number, index: number
   const normalized = typeof value === "string"
     ? value.toLowerCase().replace(/[^a-z0-9_:-]+/g, "_").replace(/^[_:-]+|[_:-]+$/g, "")
     : "";
-  return /^[a-z][a-z0-9_:-]{0,99}$/.test(normalized) ? normalized : `memory_${sourceMessageId}_${index + 1}`;
+  if (/^[a-z][a-z0-9_:-]{0,99}$/.test(normalized)) return normalized;
+  return `memory_${sourceMessageId}_${index + 1}`;
 }
 
 function normalizeText(value: unknown, maximumLength: number): string {
@@ -316,7 +350,18 @@ function normalizeText(value: unknown, maximumLength: number): string {
 
 function normalizeLabels(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean).slice(0, 10).map((entry) => entry.slice(0, 100));
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .slice(0, 10)
+    .map((entry) => entry.slice(0, 100));
+}
+
+function normalizeImportance(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.min(5, Math.floor(value)))
+    : 3;
 }
 
 function resolveUserSourceMessageId(
@@ -363,21 +408,99 @@ function parseMemoryUpdate(
 
   const facts = Array.isArray(parsed.stable_facts) ? parsed.stable_facts : [];
   const episodes = Array.isArray(parsed.episodes) ? parsed.episodes : [];
-  const normalizedFacts: ExtractedMemoryFact[] = facts.slice(0, 50).flatMap((fact, index) => {
-    if (!isRecord(fact)) return [];
-    const factValue = normalizeText(fact.fact_value ?? fact.value ?? fact.content, 1_000);
-    if (factValue.length === 0) return [];
-    const sourceMessageId = resolveUserSourceMessageId(sourceMessages, fact.source_message_id, fact.evidence, factValue);
-    if (sourceMessageId === null) return [];
-    return [{ category: normalizeCategory(fact.category), factKey: normalizeFactKey(fact.fact_key ?? fact.key, sourceMessageId, index), factValue, confidence: normalizeConfidence(fact.confidence), sourceMessageId }];
-  });
-  const normalizedEpisodes: ExtractedMemoryEpisode[] = episodes.slice(0, Math.max(0, 50 - normalizedFacts.length)).flatMap((episode) => {
-    if (!isRecord(episode)) return [];
-    const episodeContent = normalizeText(episode.content ?? episode.summary, 1_000);
-    if (episodeContent.length === 0) return [];
-    const sourceMessageId = resolveUserSourceMessageId(sourceMessages, episode.source_message_id, episode.evidence, episodeContent);
-    if (sourceMessageId === null) return [];
-    return [{ category: normalizeCategory(episode.category), content: episodeContent, people: normalizeLabels(episode.people), topics: normalizeLabels(episode.topics), occurredAt: isNonNegativeInteger(episode.occurred_at) ? episode.occurred_at : Math.floor(Date.now() / 1_000), sourceMessageId }];
+  const relationshipStates = Array.isArray(parsed.relationship_states)
+    ? parsed.relationship_states
+    : [];
+  const timeLayers = isRecord(parsed.time_layers) ? parsed.time_layers : {};
+  const normalizedFacts: ExtractedMemoryFact[] = facts
+    .slice(0, 50)
+    .flatMap((fact, index) => {
+      if (!isRecord(fact)) return [];
+      const factValue = normalizeText(fact.fact_value ?? fact.value ?? fact.content, 1_000);
+      if (factValue.length === 0) return [];
+      const sourceMessageId = resolveUserSourceMessageId(
+        sourceMessages,
+        fact.source_message_id,
+        fact.evidence,
+        factValue,
+      );
+      if (sourceMessageId === null) return [];
+      return [{
+        category: normalizeCategory(fact.category),
+        factKey: normalizeFactKey(fact.fact_key ?? fact.key, sourceMessageId, index),
+        factValue,
+        confidence: normalizeConfidence(fact.confidence),
+        sourceMessageId,
+      }];
+    });
+  const normalizedEpisodes: ExtractedMemoryEpisode[] = episodes
+    .slice(0, Math.max(0, 50 - normalizedFacts.length))
+    .flatMap((episode) => {
+      if (!isRecord(episode)) return [];
+      const episodeContent = normalizeText(episode.content ?? episode.summary, 1_000);
+      if (episodeContent.length === 0) return [];
+      const sourceMessageId = resolveUserSourceMessageId(
+        sourceMessages,
+        episode.source_message_id,
+        episode.evidence,
+        episodeContent,
+      );
+      if (sourceMessageId === null) return [];
+      return [{
+        category: normalizeCategory(episode.category),
+        content: episodeContent,
+        people: normalizeLabels(episode.people),
+        topics: normalizeLabels(episode.topics),
+        occurredAt: isNonNegativeInteger(episode.occurred_at)
+          ? episode.occurred_at
+          : Math.floor(Date.now() / 1_000),
+        sourceMessageId,
+      }];
+    });
+
+  const allowedRelationshipKinds = new Set<ExtractedRelationshipStateKind>([
+    "open_thread",
+    "emotional_state",
+    "commitment",
+    "shared_moment",
+    "interaction_outcome",
+  ]);
+  const normalizedRelationshipStates: ExtractedRelationshipState[] = relationshipStates
+    .slice(0, 20)
+    .flatMap((state) => {
+      if (
+        !isRecord(state) ||
+        !allowedRelationshipKinds.has(state.kind as ExtractedRelationshipStateKind)
+      ) return [];
+      const value = normalizeText(state.value ?? state.content, 500);
+      if (value.length === 0) return [];
+      const sourceMessageId = resolveUserSourceMessageId(
+        sourceMessages,
+        state.source_message_id,
+        state.evidence,
+        value,
+      );
+      if (sourceMessageId === null) return [];
+      return [{
+        kind: state.kind as ExtractedRelationshipStateKind,
+        value,
+        sourceMessageId,
+      }];
+    });
+
+  const normalizedTimeLayers: ExtractedTimeMemoryLayer[] = (
+    ["topic", "week", "month", "relationship"] as const
+  ).flatMap((layer) => {
+    const value = timeLayers[layer];
+    if (!isRecord(value)) return [];
+    const summary = normalizeText(value.summary, 2_000);
+    if (summary.length === 0) return [];
+    return [{
+      layer,
+      summary,
+      topics: normalizeLabels(value.topics),
+      importance: normalizeImportance(value.importance),
+    }];
   });
 
   return {
@@ -385,6 +508,8 @@ function parseMemoryUpdate(
     throughMessageId: lastMessageId,
     stableFacts: normalizedFacts,
     episodes: normalizedEpisodes,
+    relationshipStates: normalizedRelationshipStates,
+    timeLayers: normalizedTimeLayers,
   };
 }
 
@@ -401,12 +526,13 @@ export async function requestMemoryUpdate(
       {
         role: "system",
         content:
-          "仅从用户明确说出的内容更新摘要和记忆，不得从助手回复推断。输出 JSON：summary、through_message_id、stable_facts、episodes。stable_facts 只放长期稳定事实，每项包含 category、fact_key、fact_value、confidence、source_message_id、evidence；短期情绪、一次性事件和阶段状态必须放 episodes，每项包含 category、content、people、topics、occurred_at、source_message_id、evidence。evidence 必须逐字复制对应用户消息中的最短充分片段，不得把短期情绪提升为稳定事实。摘要和记忆只记录实质内容，不要记录括号旁白、动作描写或舞台说明。",
+          "仅从用户明确说出的内容更新摘要和记忆，不得从助手回复推断。输出 JSON：summary、through_message_id、stable_facts、episodes、relationship_states、time_layers。stable_facts 只放长期稳定事实；短期情绪和一次性事件放 episodes；relationship_states 只放仍有后续价值的关系状态，kind 仅可为 open_thread、emotional_state、commitment、shared_moment、interaction_outcome，每项包含 kind、value、source_message_id、evidence。open_thread 仅用于用户明确提到、之后确实可能有结果或后续的考试、约定、等待结果、计划和未完成事项；普通闲聊、已经结束的事情、助手提出的问题不得标成 open_thread。time_layers 必须包含 topic、week、month、relationship 四个对象，每个对象只含 summary、topics、importance；在对应 previousTimeLayers 基础上压缩更新，topic 聚焦当前话题，week 聚焦本周，month 聚焦本月，relationship 只保留有明确用户证据的长期关系脉络。importance 为 1 至 5。所有新增信息必须来自本批用户消息；不得从助手话语、人格资料或推测创造共同经历、约定、感情结论或 Persona 的现实活动。",
       },
       {
         role: "user",
         content: JSON.stringify({
           previousSummary: input.previousSummary,
+          previousTimeLayers: input.previousTimeLayers ?? [],
           allowedCategories: MEMORY_CATEGORIES,
           messages: input.sourceMessages,
         }),

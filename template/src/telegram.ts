@@ -89,6 +89,11 @@ export interface TelegramClient {
   sendTyping(chatId: number): Promise<void>;
   deleteMessage(chatId: number, messageId: number): Promise<void>;
   editMessageText(chatId: number, messageId: number, text: string): Promise<void>;
+  editMessageReplyMarkup(
+    chatId: number,
+    messageId: number,
+    replyMarkup: TelegramReplyMarkup,
+  ): Promise<void>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void>;
   configureManagement(input: {
     webhookUrl: string;
@@ -177,6 +182,14 @@ export function createTelegramClient(
       });
     },
 
+    async editMessageReplyMarkup(chatId, messageId, replyMarkup) {
+      await call("editMessageReplyMarkup", {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: replyMarkup,
+      });
+    },
+
     async answerCallbackQuery(callbackQueryId, text) {
       await call("answerCallbackQuery", {
         callback_query_id: callbackQueryId,
@@ -200,7 +213,7 @@ export function createTelegramClient(
       await call("setChatMenuButton", {
         menu_button: {
           type: "web_app",
-          text: "Persona Bot 管理",
+          text: "Persona 管理",
           web_app: { url: appUrl.toString() },
         },
       });

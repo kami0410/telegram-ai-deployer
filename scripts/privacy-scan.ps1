@@ -14,6 +14,8 @@ $excludedPaths = @(
   ':(exclude)test/template-privacy.test.mjs',
   ':(exclude)test/cloudflare.test.mjs',
   ':(exclude)package-lock.json',
+  ':(exclude)package.json',
+  ':(exclude)test/package-config.test.mjs',
   ':(exclude)template/package-lock.json',
   ':(exclude)template/vitest.config.ts',
   ':(exclude)docs/user-guide.md',
@@ -62,7 +64,7 @@ function Assert-GitStructuredClean {
 function Assert-DirectoryClean {
   param([string]$Path)
   if (-not (Test-Path -LiteralPath $Path)) { return }
-  & rg --files-with-matches --hidden --no-messages -I -i -e $forbidden --glob '!**/node_modules/**' --glob '!**/dist/**' --glob '!**/.git/**' --glob '!**/.workbuddy/**' --glob '!scripts/privacy-scan.ps1' --glob '!scripts/privacy-rules.mjs' --glob '!test/privacy-gate.test.mjs' --glob '!test/template-privacy.test.mjs' --glob '!test/cloudflare.test.mjs' $Path | Out-Null
+  & rg --files-with-matches --hidden --no-messages -I -i -e $forbidden --glob '!**/node_modules/**' --glob '!**/dist/**' --glob '!**/.git/**' --glob '!**/.workbuddy/**' --glob '!package.json' --glob '!scripts/privacy-scan.ps1' --glob '!scripts/privacy-rules.mjs' --glob '!test/package-config.test.mjs' --glob '!test/privacy-gate.test.mjs' --glob '!test/template-privacy.test.mjs' --glob '!test/cloudflare.test.mjs' $Path | Out-Null
   if ($LASTEXITCODE -eq 0) { throw "Privacy scan detected forbidden content in a filesystem scope." }
   if ($LASTEXITCODE -ne 1) { throw "Filesystem privacy scan failed to execute." }
 }

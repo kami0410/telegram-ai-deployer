@@ -23,6 +23,12 @@ export function createPreloadApi(ipcRenderer) {
       ipcRenderer.on("deploy:progress", wrapped);
       return () => ipcRenderer.removeListener("deploy:progress", wrapped);
     },
+    onUpdateStatus: (listener) => {
+      if (typeof listener !== "function") throw new TypeError("Update listener must be a function");
+      const wrapped = (_event, payload) => listener(payload);
+      ipcRenderer.on("update:status", wrapped);
+      return () => ipcRenderer.removeListener("update:status", wrapped);
+    },
   };
   return Object.freeze(api);
 }

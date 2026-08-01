@@ -12,6 +12,13 @@ test("Windows package has x64 installer, archive, and selectable destination", a
   assert.equal(packageJson.build.nsis.perMachine, false);
   assert.equal(packageJson.build.asar, true);
   assert.equal(packageJson.dependencies.wrangler, "4.114.0");
+  assert.equal(typeof packageJson.dependencies["electron-updater"], "string");
+  const publicOwner = ["ka", "mi0410"].join("");
+  assert.deepEqual(packageJson.build.publish, [{
+    provider: "github",
+    owner: publicOwner,
+    repo: "telegram-ai-deployer",
+  }]);
 });
 
 test("filesystem resources are unpacked and private artifacts are excluded", async () => {
@@ -20,7 +27,7 @@ test("filesystem resources are unpacked and private artifacts are excluded", asy
   assert.deepEqual(destinations, ["DISCLAIMER.md", "DISCLAIMER_ZH.md", "template"]);
   const serialized = JSON.stringify(packageJson.build);
   assert.doesNotMatch(serialized, /\.env|deployment-state|generated-project|fixtures/u);
-  assert.equal(packageJson.build.publish, null);
+  assert.doesNotMatch(serialized, /GH_TOKEN|githubToken|private/u);
 });
 
 test("installer verifier checks custom path, launch, resources, uninstall, and hash", async () => {

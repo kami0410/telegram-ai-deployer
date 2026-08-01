@@ -14,6 +14,7 @@ interface MemoryFactRow {
   created_at: number;
   updated_at: number;
   last_used_at: number | null;
+  control: "normal" | "pinned";
 }
 
 function confidenceScore(confidence: MemoryConfidence): number {
@@ -118,9 +119,16 @@ export async function getRelevantMemoryFacts(
   const result = await db
     .prepare(
       `SELECT id, category, fact_key, fact_value, confidence,
-              created_at, updated_at, last_used_at
+              created_at, updated_at, last_used_at,
+              COALESCE((SELECT control FROM memory_controls
+                WHERE owner_id = memory_facts.owner_id AND entity_kind = 'fact'
+                  AND entity_id = memory_facts.id), 'normal') AS control
        FROM memory_facts
-       WHERE owner_id = ?
+       WHERE owner_id = ? AND NOT EXISTS (
+         SELECT 1 FROM memory_controls
+         WHERE owner_id = memory_facts.owner_id AND entity_kind = 'fact'
+           AND entity_id = memory_facts.id AND control = 'ignored'
+       )
        ORDER BY updated_at DESC, id ASC
        LIMIT 200`,
     )
@@ -132,6 +140,8 @@ export async function getRelevantMemoryFacts(
       const topic = topicScore(query, row);
       return {
         id: row.id,
+        sourceKind: "fact" as const,
+        sourceId: row.id,
         factKey: row.fact_key,
         factValue: row.fact_value,
         category: row.category,
@@ -141,12 +151,15 @@ export async function getRelevantMemoryFacts(
           confidenceScore(row.confidence) +
           topic +
           recencyScore(row.updated_at, now) +
-          (row.last_used_at === null ? 0 : 5),
+          (row.last_used_at === null ? 0 : now - row.last_used_at < 12 * 3_600 ? -220 : 5) +
+          (row.control === "pinned" ? 500 : 0),
+        control: row.control,
         updatedAt: row.updated_at,
       };
     })
     .filter((fact) =>
       fact.topic > 0 ||
+      fact.control === "pinned" ||
       (fact.confidence === "high" && (fact.category === "identity" || fact.category === "relationship"))
     )
     .sort(
@@ -169,5 +182,5 @@ export async function getRelevantMemoryFacts(
     }
   }
 
-  return ranked.map(({ id: _id, updatedAt: _updatedAt, topic: _topic, ...fact }) => fact);
+  return ranked.map(({ id: _id, updatedAt: _updatedAt, topic: _topic, control: _control, ...fact }) => fact);
 }

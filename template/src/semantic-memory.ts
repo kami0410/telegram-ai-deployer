@@ -80,7 +80,10 @@ export async function syncVectorJob(
     if (job.entityKind === "fact") {
       const row = await db.prepare(
         `SELECT fact_key, fact_value, category, updated_at
-         FROM memory_facts WHERE id = ? AND owner_id = ?`,
+         FROM memory_facts WHERE id = ? AND owner_id = ?
+           AND NOT EXISTS (SELECT 1 FROM memory_controls
+             WHERE owner_id = memory_facts.owner_id AND entity_kind = 'fact'
+               AND entity_id = memory_facts.id AND control = 'ignored')`,
       ).bind(job.entityId, job.ownerId).first<{
         fact_key: string;
         fact_value: string;
@@ -98,7 +101,10 @@ export async function syncVectorJob(
     } else {
       const row = await db.prepare(
         `SELECT content, category, people_json, topics_json, occurred_at FROM memory_episodes
-         WHERE id = ? AND owner_id = ? AND status = 'active'`,
+         WHERE id = ? AND owner_id = ? AND status = 'active'
+           AND NOT EXISTS (SELECT 1 FROM memory_controls
+             WHERE owner_id = memory_episodes.owner_id AND entity_kind = 'episode'
+               AND entity_id = memory_episodes.id AND control = 'ignored')`,
       ).bind(job.entityId, job.ownerId).first<{
         content: string;
         category: string;
