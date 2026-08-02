@@ -10,6 +10,14 @@ import { isPersonaCorrectionText } from "./commands";
 import { buildAskPrompt, buildPersonaPrompt } from "./prompt";
 import { classifyDialogue } from "./dialogue-guidance";
 import { sanitizePersonaReply } from "./persona-reply";
+import {
+  calculateBubbleGapSeconds,
+  nextBubbleDelaySeconds,
+  proactiveOutputTokenBudget,
+  replyOutputTokenBudget,
+  splitSemanticBubbles,
+  type DeliveryFlow,
+} from "./reply-delivery";
 import { createTelegramClient, TelegramError } from "./telegram";
 import {
   appendMessage,
@@ -34,6 +42,23 @@ import {
   getRelevantMemoryFacts,
 } from "./storage/memory-repository";
 import { saveMemoryExtraction } from "./storage/semantic-memory-repository";
+import {
+  getGraphCandidates,
+  upsertMemoryGraph,
+} from "./storage/memory-graph-repository";
+import {
+  rankMemoryCandidates,
+  type MemoryRetrievalCandidate,
+  type RankedMemoryCandidate,
+} from "./memory-reranker";
+import { saveRecallTrace } from "./storage/memory-recall-repository";
+import { getActiveIdentityCore, recordIdentityEvidence } from "./storage/identity-core-repository";
+import { detectRepairSignal } from "./interaction-repair";
+import { recordQualityEvent } from "./quality-events";
+import {
+  attachProactiveOutcome,
+  markProactiveSent,
+} from "./storage/proactive-decision-repository";
 import {
   clearMemoryUpdateFailure,
   recordMemoryUpdateFailure,
@@ -103,13 +128,20 @@ import {
 export const BUSY_MESSAGE = "我先去忙啦";
 const DAILY_LIMIT_MESSAGE = "今天先聊到这里吧，明天再继续呀。";
 const SAFE_PROACTIVE_SHARES = [
-  "从已导入的人格兴趣中选择一个轻松话题，但不要虚构刚发生的经历",
-  "可以分享一个不涉及个人经历的轻松学习、工作或生活观点",
-  "可以自然关心近况、休息或饮食，但不制造压力",
-  "可以接续近期真实聊过的普通话题，不要声称记得未提供的细节",
+  "最近有没有吃到喜欢的水果或小甜品",
+  "可以聊聊最近在看的韩剧或喜欢的韩星",
+  "可以分享一个不涉及个人经历的轻松学习或生活观点",
+  "可以提醒休息、吃饭或别给自己太大压力",
 ] as const;
 
-export type MessageFlow = "normal" | "comfort" | "conflict" | "safety";
+export type MessageFlow = DeliveryFlow;
+
+export {
+  calculateBubbleGapSeconds,
+  proactiveOutputTokenBudget,
+  replyOutputTokenBudget,
+  splitSemanticBubbles,
+};
 
 export type QueueJob =
   | {
@@ -231,6 +263,45 @@ function mergeMemories(
     .slice(0, limit);
 }
 
+function retrievalCandidate(
+  memory: Awaited<ReturnType<typeof getRelevantMemoryFacts>>[number],
+  now: number,
+): MemoryRetrievalCandidate | null {
+  if (memory.sourceKind === undefined || memory.sourceId === undefined) return null;
+  return {
+    entityKind: memory.sourceKind,
+    entityId: memory.sourceId,
+    factKey: memory.factKey,
+    factValue: memory.factValue,
+    category: memory.category,
+    confidence: memory.confidence,
+    channel: memory.retrievalChannel ?? "lexical",
+    relevanceScore: memory.priorityScore,
+    updatedAt: memory.updatedAt ?? now,
+    ...(memory.sourceMessageId === undefined ? {} : { sourceMessageId: memory.sourceMessageId }),
+    status: "active",
+    control: memory.control ?? "normal",
+  };
+}
+
+function promptMemory(candidate: RankedMemoryCandidate) {
+  return {
+    ...(candidate.entityKind === "graph" ? {} : {
+      sourceKind: candidate.entityKind,
+      sourceId: candidate.entityId,
+    }),
+    factKey: candidate.factKey,
+    factValue: candidate.factValue,
+    category: candidate.category,
+    confidence: candidate.confidence,
+    priorityScore: candidate.totalScore,
+    retrievalChannel: candidate.channel,
+    updatedAt: candidate.updatedAt,
+    ...(candidate.sourceMessageId === undefined ? {} : { sourceMessageId: candidate.sourceMessageId }),
+    control: candidate.control,
+  };
+}
+
 function randomInteger(
   minimum: number,
   maximum: number,
@@ -259,10 +330,6 @@ export function calculateInitialDelaySeconds(
   return randomInteger(6, 20, random);
 }
 
-export function calculateBubbleGapSeconds(random: RandomSource): number {
-  return randomInteger(2, 4, random);
-}
-
 export function calculateBusyDurationSeconds(random: RandomSource): number {
   return randomInteger(3_600, 10_800, random);
 }
@@ -277,32 +344,6 @@ export function shouldEnterBusy(
   return randomInteger(1, 100, random) <= bounded;
 }
 
-export function splitSemanticBubbles(text: string): string[] {
-  if (text.length === 0) return [];
-  const rawParts = text.match(/[^。！？!?\n]+[。！？!?]*|\n+/gu) ?? [text];
-  const parts: string[] = [];
-  for (const part of rawParts) {
-    if (part.trim().length === 0 && parts.length > 0) {
-      parts[parts.length - 1] = `${parts.at(-1) ?? ""}${part}`;
-    } else {
-      parts.push(part);
-    }
-  }
-  while (parts.length > 5) {
-    const tail = parts.pop();
-    if (tail !== undefined) parts[parts.length - 1] = `${parts.at(-1) ?? ""}${tail}`;
-  }
-  if (parts.length === 1 && text.length > 160) {
-    const middle = Math.floor(text.length / 2);
-    const candidates = [text.lastIndexOf("，", middle), text.lastIndexOf(" ", middle)];
-    const splitAt = Math.max(...candidates) + 1;
-    if (splitAt > 20 && splitAt < text.length - 20) {
-      return [text.slice(0, splitAt), text.slice(splitAt)];
-    }
-  }
-  return parts;
-}
-
 function utcDate(epochSeconds: number): string {
   return new Date(epochSeconds * 1_000).toISOString().slice(0, 10);
 }
@@ -315,12 +356,15 @@ function beijingTime(epochSeconds: number): string {
   return `${shifted}（北京时间，UTC+8）`;
 }
 
-function deepSeekOptions(env: Env, dependencies: QueueDependencies): DeepSeekOptions {
+function deepSeekOptions(
+  env: Env,
+  dependencies: QueueDependencies,
+  maxOutputTokens = Number(env.MAX_OUTPUT_TOKENS),
+): DeepSeekOptions {
   return {
     apiKey: env.DEEPSEEK_API_KEY,
     model: env.DEEPSEEK_MODEL,
-    thinking: env.DEEPSEEK_THINKING_MODE === "enabled" ? "enabled" : "disabled",
-    maxOutputTokens: Number(env.MAX_OUTPUT_TOKENS),
+    maxOutputTokens,
     ...(dependencies.fetcher === undefined
       ? {}
       : { fetcher: dependencies.fetcher }),
@@ -496,10 +540,7 @@ async function enqueueDeliveries(
     };
     const delaySeconds =
       delivery.kind !== "typing" && previousBubble !== undefined
-        ? Math.min(
-            8,
-            Math.max(4, delivery.targetAt - previousBubble.targetAt),
-          )
+        ? nextBubbleDelaySeconds(delivery.targetAt, previousBubble.targetAt)
         : Math.max(0, Math.ceil(delivery.targetAt - now));
     await queue.send(job, {
       delaySeconds,
@@ -521,7 +562,7 @@ async function buildAndStoreDeliveryPlan(
     enterBusy: boolean;
   },
 ): Promise<DeliveryRecord[]> {
-  const bubbles = splitSemanticBubbles(input.content);
+  const bubbles = splitSemanticBubbles(input.content, input.flow);
   if (input.enterBusy) bubbles.push(BUSY_MESSAGE);
   const initialDelay =
     input.mode === "ask"
@@ -561,7 +602,10 @@ async function processReplyGroup(
   const conversationId = sources.at(-1)!.conversation_id;
   const updateIds = sources.map((source) => source.telegram_update_id);
   const mode = sources.some((source) => source.mode === "ask") ? "ask" : "persona";
-  if (mode === "persona") await noteUserReply(env.DB, ownerId, now);
+  if (mode === "persona") {
+    await noteUserReply(env.DB, ownerId, now);
+    await attachProactiveOutcome(env.DB, ownerId, now);
+  }
   const combinedContent = sources.map((source) => source.content).join("\n");
   const flow = classifyMessageFlow(combinedContent);
   const dialogue = classifyDialogue(combinedContent);
@@ -605,7 +649,12 @@ async function processReplyGroup(
   let answer = DAILY_LIMIT_MESSAGE;
   let inputTokens = 0;
   let outputTokens = 0;
+  let promptCacheHitTokens = 0;
+  let promptCacheMissTokens = 0;
   let usedMemoryRefs: Array<{ kind: "fact" | "episode"; id: number }> = [];
+  let recallItems: RankedMemoryCandidate[] = [];
+  let recallPersonaVersion = 0;
+  let recallExplicitHistory = false;
   if (reserved) {
     try {
       if (mode === "ask") {
@@ -619,13 +668,16 @@ async function processReplyGroup(
         answer = response.content;
         inputTokens = response.usage.inputTokens;
         outputTokens = response.usage.outputTokens;
+        promptCacheHitTokens = response.usage.promptCacheHitTokens;
+        promptCacheMissTokens = response.usage.promptCacheMissTokens;
       } else {
         const persona = await getCurrentPersona(env.DB, ownerId);
         if (persona === null || !persona.enabled) {
           answer = "Persona 人格当前不可用。";
         } else {
           const services = semanticServices(env, dependencies);
-          const [d1MemoryFacts, semanticMemoryFacts, summary, recent, relationshipStates, replyFeedback, timeMemories, interactionPreferences, conversationSignals, evidenceReflections] = await Promise.all([
+          recallExplicitHistory = explicitlyRequestsHistory(combinedContent);
+          const [d1MemoryFacts, semanticMemoryFacts, graphMemories, summary, recent, relationshipStates, replyFeedback, timeMemories, interactionPreferences, conversationSignals, evidenceReflections, identityCore] = await Promise.all([
             getRelevantMemoryFacts(env.DB, ownerId, combinedContent, 20, now),
             services === null
               ? Promise.resolve([])
@@ -636,8 +688,9 @@ async function processReplyGroup(
                   ownerId,
                   combinedContent,
                   now,
-                  explicitlyRequestsHistory(combinedContent),
+                  recallExplicitHistory,
                 ),
+            getGraphCandidates(env.DB, ownerId, combinedContent, 20).catch(() => []),
             getLatestConversationSummary(env.DB, conversationId),
             getRecentMessages(env.DB, conversationId, 30),
             getActiveRelationshipStates(env.DB, ownerId, now),
@@ -646,8 +699,33 @@ async function processReplyGroup(
             getConfirmedInteractionPreferences(env.DB, ownerId),
             getConversationSignals(env.DB, ownerId, conversationId, now),
             getRecentEvidenceReflections(env.DB, ownerId),
+            getActiveIdentityCore(env.DB, ownerId),
           ]);
-          const memoryFacts = mergeMemories(d1MemoryFacts, semanticMemoryFacts, 20);
+          const merged = mergeMemories(d1MemoryFacts, semanticMemoryFacts, 30);
+          const ordinaryCandidates = merged.flatMap((memory) => {
+            const candidate = retrievalCandidate(memory, now);
+            return candidate === null ? [] : [candidate];
+          });
+          const graphCandidates: MemoryRetrievalCandidate[] = graphMemories.map((memory) => ({
+            entityKind: "graph",
+            entityId: memory.id,
+            factKey: memory.key,
+            factValue: memory.value,
+            category: memory.type,
+            confidence: memory.confidence,
+            channel: "graph",
+            relevanceScore: 500,
+            updatedAt: memory.updatedAt,
+            sourceMessageId: memory.sourceMessageId,
+            status: "active",
+            control: "normal",
+          }));
+          recallItems = rankMemoryCandidates(
+            [...ordinaryCandidates, ...graphCandidates],
+            { now, limit: 20, explicitHistory: recallExplicitHistory },
+          );
+          recallPersonaVersion = persona.version;
+          const memoryFacts = recallItems.map(promptMemory);
           const sourceIds = new Set(sources.map((source) => source.id));
           const builtPrompt = buildPersonaPrompt({
               persona: persona.snapshot,
@@ -658,6 +736,8 @@ async function processReplyGroup(
               interactionPreferences,
               conversationSignals,
               evidenceReflections,
+              identityCore,
+              temporaryRepair: detectRepairSignal({ text: combinedContent }),
               summary: summary?.summary ?? null,
               recentMessages: recent
                 .filter(
@@ -672,12 +752,18 @@ async function processReplyGroup(
             });
           usedMemoryRefs = builtPrompt.usedMemoryRefs;
           const response = await requestChat(
-            deepSeekOptions(env, dependencies),
+            deepSeekOptions(
+              env,
+              dependencies,
+              replyOutputTokenBudget(Number(env.MAX_OUTPUT_TOKENS), flow),
+            ),
             builtPrompt.messages,
           );
           answer = sanitizePersonaReply(response.content);
           inputTokens = response.usage.inputTokens;
           outputTokens = response.usage.outputTokens;
+          promptCacheHitTokens = response.usage.promptCacheHitTokens;
+          promptCacheMissTokens = response.usage.promptCacheMissTokens;
         }
       }
       await addDailyTokenUsage(
@@ -686,6 +772,8 @@ async function processReplyGroup(
         utcDate(now),
         inputTokens,
         outputTokens,
+        promptCacheHitTokens,
+        promptCacheMissTokens,
       );
     } catch (error) {
       if (!(error instanceof DeepSeekError) || error.code !== "invalid_response") {
@@ -705,6 +793,39 @@ async function processReplyGroup(
     updateIds,
     now,
   });
+  if (mode === "persona") {
+    try {
+      await saveRecallTrace(env.DB, {
+        ownerId,
+        conversationId,
+        assistantMessageId,
+        queryHash: await sha256Hex(combinedContent),
+        explicitHistory: recallExplicitHistory,
+        model: env.DEEPSEEK_MODEL,
+        personaVersion: recallPersonaVersion,
+        items: recallItems,
+        now,
+      });
+      await recordQualityEvent(env, {
+        ownerId, category: "retrieval", reasonCode: "hybrid_recall",
+        metrics: { selected_count: recallItems.length, explicit_history: recallExplicitHistory ? 1 : 0 },
+        modelVersion: env.DEEPSEEK_MODEL, personaVersion: recallPersonaVersion,
+        workerVersion: "runtime", now,
+      });
+    } catch (error) {
+      safeLog({
+        eventHash: await sha256Hex(`recall_trace:${ownerId}:${assistantMessageId}`),
+        stage: "memory_recall_trace",
+        durationMs: 0,
+        httpStatus: null,
+        errorCode: error instanceof Error ? error.message : "memory_recall_trace_failed",
+        inputTokens: null,
+        outputTokens: null,
+        chunkCount: null,
+        personaHash: null,
+      });
+    }
+  }
   const enterBusy =
     mode === "persona" &&
     shouldEnterBusy(
@@ -879,6 +1000,8 @@ async function processPersonaDraft(
       utcDate(now),
       proposal.usage.inputTokens,
       proposal.usage.outputTokens,
+      proposal.usage.promptCacheHitTokens,
+      proposal.usage.promptCacheMissTokens,
     );
     const confirmationText =
       job.operation === "correction" ? "确认修正" : "确认新增";
@@ -1169,6 +1292,49 @@ async function processMemoryUpdate(
     states: result.relationshipStates,
     now,
   });
+  try {
+    await upsertMemoryGraph(env.DB, {
+      ownerId: job.ownerId,
+      nodes: result.graphNodes,
+      edges: result.graphEdges,
+      now,
+    });
+  } catch (error) {
+    safeLog({
+      eventHash: await sha256Hex(`memory_graph:${job.ownerId}:${job.conversationId}:${now}`),
+      stage: "memory_graph",
+      durationMs: 0,
+      httpStatus: null,
+      errorCode: error instanceof Error ? error.message : "memory_graph_failed",
+      inputTokens: null,
+      outputTokens: null,
+      chunkCount: null,
+      personaHash: null,
+    });
+  }
+  for (const evidence of result.identityEvidence) {
+    try {
+      await recordIdentityEvidence(env.DB, {
+        ownerId: job.ownerId,
+        identityKey: evidence.identityKey,
+        identityValue: evidence.identityValue,
+        sourceMessageId: evidence.sourceMessageId,
+        now,
+      });
+    } catch (error) {
+      safeLog({
+        eventHash: await sha256Hex(`identity_evidence:${job.ownerId}:${evidence.sourceMessageId}`),
+        stage: "identity_evidence",
+        durationMs: 0,
+        httpStatus: null,
+        errorCode: error instanceof Error ? error.message : "identity_evidence_failed",
+        inputTokens: null,
+        outputTokens: null,
+        chunkCount: null,
+        personaHash: null,
+      });
+    }
+  }
   await saveEvidenceReflection(env.DB, {
     ownerId: job.ownerId,
     conversationId: job.conversationId,
@@ -1228,6 +1394,8 @@ async function processMemoryUpdate(
     utcDate(now),
     result.usage.inputTokens,
     result.usage.outputTokens,
+    result.usage.promptCacheHitTokens,
+    result.usage.promptCacheMissTokens,
   );
     await clearMemoryUpdateFailure(env.DB, job.ownerId, job.conversationId);
   } catch (error) {
@@ -1346,14 +1514,14 @@ async function processWeeklyReview(
     );
     if (!reserved) throw new QueueProcessingError("daily_limit", true);
     const transcript = messages
-      .map((message) => `${message.role === "user" ? "用户" : "人格"}：${message.content}`)
+      .map((message) => `${message.role === "user" ? "Kami" : "Persona"}：${message.content}`)
       .join("\n")
       .slice(-40_000);
     const response = await requestChat(deepSeekOptions(env, dependencies), [
       {
         role: "system",
         content:
-          "你是当前导入人格的模拟。根据提供的最近七天真实聊天，写一段很短、自然、温柔的每周回顾：提到一两件确实聊过的事和对方的情绪或进展，可以自然鼓励，但不要列清单、不要说自己在做周报、不要虚构。控制在约100个中文字符。",
+          "你是 Persona。根据提供的最近七天真实聊天，写一段很短、自然、温柔的每周回顾：提到一两件确实聊过的事和对方的情绪或进展，可以自然鼓励，但不要列清单、不要说自己在做周报、不要虚构。控制在约100个中文字符。",
       },
       { role: "user", content: transcript },
     ]);
@@ -1363,6 +1531,8 @@ async function processWeeklyReview(
       utcDate(now),
       response.usage.inputTokens,
       response.usage.outputTokens,
+      response.usage.promptCacheHitTokens,
+      response.usage.promptCacheMissTokens,
     );
     const conversation = await getOrCreateActiveConversation(env.DB, job.ownerId, now);
     const stored = await appendMessage(env.DB, {
@@ -1475,14 +1645,18 @@ async function processProactive(
       ? {
           role: "system",
           content:
-            `[PROACTIVE_CONTACT]\n只生成一次轻量主动联系。本次安全话题提示：${shareCue}。可以延续旧话题，也可以围绕学习和生活提出一个轻松问题或观点，或自然提醒休息或吃饭。即使上一次主动联系没有回复，也可以换话题，但不要提及对方未回复。主动联系频率由系统调度。不得虚构现实人物当天的经历、地点、行程或正在做的事；不催回复。`,
+            `[PROACTIVE_CONTACT]\n只生成一次轻量主动联系。本次安全话题提示：${shareCue}。可以自然分享一句观点而不总是提问。即使上一次主动联系没有回复，也可以换话题，但不要提及对方未回复。主动联系频率由系统调度。不得虚构 Persona 当天的经历、地点、行程或正在做的事；不催回复。`,
         }
       : {
           role: "system",
           content: `[PROACTIVE_FOLLOW_UP]\n用一条简短自然的消息问问这个未完话题后来怎么样了。不要说“我记得”或解释记忆来源；不要假设结果已经发生，不补充用户没说过的细节，不催回复。\n提炼话题：${openThread.value}\n用户原话：${openThread.sourceContent}`,
         };
     const response = await requestChat(
-      deepSeekOptions(env, dependencies),
+      deepSeekOptions(
+        env,
+        dependencies,
+        proactiveOutputTokenBudget(Number(env.MAX_OUTPUT_TOKENS)),
+      ),
       prompt.messages,
     );
     await addDailyTokenUsage(
@@ -1491,6 +1665,8 @@ async function processProactive(
       utcDate(now),
       response.usage.inputTokens,
       response.usage.outputTokens,
+      response.usage.promptCacheHitTokens,
+      response.usage.promptCacheMissTokens,
     );
     const stored = await appendMessage(env.DB, {
       ownerId: job.ownerId,
@@ -1511,6 +1687,7 @@ async function processProactive(
       content: stored.content,
     };
     await noteProactiveSent(env.DB, job.ownerId, now);
+    await markProactiveSent(env.DB, job.ownerId, job.scheduledAt, stored.messageId);
   }
 
   let deliveries = await getDeliveriesForAssistant(env.DB, assistant.id);
@@ -1583,7 +1760,17 @@ async function processEphemeral(
     role: "system",
     content: "[MANUAL_REDO]\n重新回答最近一条用户消息，遵循用户给出的重试要求；不要解释这是重试。",
   });
-  const response = await requestChat(deepSeekOptions(env, dependencies), prompt.messages);
+  const response = await requestChat(
+    deepSeekOptions(
+      env,
+      dependencies,
+      replyOutputTokenBudget(
+        Number(env.MAX_OUTPUT_TOKENS),
+        classifyMessageFlow(currentMessage),
+      ),
+    ),
+    prompt.messages,
+  );
   const content = sanitizePersonaReply(response.content);
   const sent = await createTelegramClient(env.TELEGRAM_BOT_TOKEN, dependencies.fetcher)
     .sendMessage(job.chatId, content);
@@ -1597,7 +1784,8 @@ async function processEphemeral(
     });
   }
   await addDailyTokenUsage(env.DB, job.ownerId, utcDate(now),
-    response.usage.inputTokens, response.usage.outputTokens);
+    response.usage.inputTokens, response.usage.outputTokens,
+    response.usage.promptCacheHitTokens, response.usage.promptCacheMissTokens);
   await markUpdate(env.DB, job.telegramUpdateId, "completed", now);
 }
 

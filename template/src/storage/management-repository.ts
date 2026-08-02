@@ -41,6 +41,7 @@ export interface ManagementOverview {
   personaUpdatedAt: number | null;
   pendingDraftCount: number;
   memoryCount: number;
+  episodeCount: number;
   memoryByCategory: Record<string, number>;
 }
 
@@ -396,7 +397,7 @@ export async function getManagementOverview(
   db: D1Database,
   ownerId: number,
 ): Promise<ManagementOverview> {
-  const [profile, draft, categories] = await Promise.all([
+  const [profile, draft, categories, episodes] = await Promise.all([
     db.prepare(
       "SELECT current_version, updated_at FROM persona_profiles WHERE owner_id = ?",
     ).bind(ownerId).first<{ current_version: number; updated_at: number }>(),
@@ -406,6 +407,9 @@ export async function getManagementOverview(
     db.prepare(
       "SELECT category, COUNT(*) AS count FROM memory_facts WHERE owner_id = ? GROUP BY category",
     ).bind(ownerId).all<{ category: string; count: number }>(),
+    db.prepare(
+      "SELECT COUNT(*) AS count FROM memory_episodes WHERE owner_id = ? AND status = 'active'",
+    ).bind(ownerId).first<{ count: number }>(),
   ]);
   const memoryByCategory = Object.fromEntries(
     categories.results.map((row) => [row.category, row.count]),
@@ -415,6 +419,7 @@ export async function getManagementOverview(
     personaUpdatedAt: profile?.updated_at ?? null,
     pendingDraftCount: draft?.count ?? 0,
     memoryCount: categories.results.reduce((sum, row) => sum + row.count, 0),
+    episodeCount: episodes?.count ?? 0,
     memoryByCategory,
   };
 }

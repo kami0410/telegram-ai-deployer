@@ -14,7 +14,6 @@ export function consumeDeploymentForm(secretControls, values) {
     outputDir: values.outputDir,
     personaPath: values.personaPath ?? "",
     model: values.model,
-    thinking: values.thinking === true,
     disclaimerAccepted: values.acceptedDisclaimer === true,
     telegramToken: secretControls.telegramToken.value,
     deepseekKey: secretControls.deepseekKey.value,

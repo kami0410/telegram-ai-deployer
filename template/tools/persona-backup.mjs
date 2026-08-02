@@ -1,6 +1,13 @@
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8,6 +15,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const FORMAT = "persona-d1-backup-v1";
 const ITERATIONS = 210_000;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const AUTOMATIC_BACKUP_NAME =
+  /^persona-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z\.personabackup$/u;
 
 function deriveKey(passphrase, salt, iterations = ITERATIONS) {
   if (typeof passphrase !== "string" || passphrase.length < 12) {
@@ -16,29 +25,21 @@ function deriveKey(passphrase, salt, iterations = ITERATIONS) {
   return pbkdf2Sync(passphrase, salt, iterations, 32, "sha256");
 }
 
-export function readConfiguredDatabaseName(configText) {
-  const config = JSON.parse(configText);
-  const binding = config?.d1_databases?.find((entry) => entry?.binding === "DB");
-  if (typeof binding?.database_name !== "string" || binding.database_name.length === 0) {
-    throw new Error("d1_database_name_not_found");
-  }
-  return binding.database_name;
-}
-
 export async function encryptBackup(data, passphrase, metadata) {
   const salt = randomBytes(16);
   const iv = randomBytes(12);
   const key = deriveKey(passphrase, salt);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const ciphertext = Buffer.concat([cipher.update(data), cipher.final()]);
-  return JSON.stringify({
+  const envelope = {
     format: FORMAT,
     createdAt: metadata.createdAt,
     database: metadata.database,
     kdf: { name: "pbkdf2-sha256", iterations: ITERATIONS, salt: salt.toString("base64") },
     cipher: { name: "aes-256-gcm", iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64") },
     ciphertext: ciphertext.toString("base64"),
-  });
+  };
+  return JSON.stringify(envelope);
 }
 
 export async function decryptBackup(serialized, passphrase) {
@@ -77,14 +78,44 @@ function runWrangler(args) {
   if (result.status !== 0) throw new Error(`wrangler_failed_${result.status ?? "unknown"}`);
 }
 
-async function configuredDatabaseName() {
-  return readConfiguredDatabaseName(await readFile(path.join(ROOT, "wrangler.jsonc"), "utf8"));
+export async function pruneAutomaticBackups(outputDirectory, keep) {
+  if (!Number.isSafeInteger(keep) || keep < 1 || keep > 1_000) {
+    throw new Error("invalid_backup_retention");
+  }
+
+  const root = path.resolve(outputDirectory);
+  const entries = await readdir(root, { withFileTypes: true });
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !AUTOMATIC_BACKUP_NAME.test(entry.name)) continue;
+    const candidate = path.resolve(root, entry.name);
+    if (path.dirname(candidate) !== root) {
+      throw new Error("backup_retention_path_escape");
+    }
+    candidates.push({
+      path: candidate,
+      name: entry.name,
+      modifiedAt: (await stat(candidate)).mtimeMs,
+    });
+  }
+
+  candidates.sort(
+    (left, right) =>
+      right.modifiedAt - left.modifiedAt ||
+      right.name.localeCompare(left.name),
+  );
+  const removed = [];
+  for (const candidate of candidates.slice(keep)) {
+    await rm(candidate.path);
+    removed.push(candidate.path);
+  }
+  return removed;
 }
 
 async function main() {
   const mode = process.argv[2];
-  const database = option("--database") ?? await configuredDatabaseName();
-  const passphrase = process.env.PERSONA_BACKUP_PASSPHRASE ?? "";
+  const database = option("--database", "persona-telegram-bot");
+  const passphrase = process.env.YUAN_BACKUP_PASSPHRASE ?? "";
   const temporarySql = path.join(os.tmpdir(), `persona-d1-${randomUUID()}.sql`);
   try {
     if (mode === "backup") {
@@ -96,6 +127,14 @@ async function main() {
       const outputPath = path.join(outputDirectory, `persona-${createdAt.replaceAll(":", "-")}.personabackup`);
       await writeFile(outputPath, encrypted, { encoding: "utf8", flag: "wx" });
       process.stdout.write(`Encrypted backup created: ${outputPath}\n`);
+      const keepValue = option("--keep");
+      if (keepValue !== null) {
+        const removed = await pruneAutomaticBackups(
+          outputDirectory,
+          Number(keepValue),
+        );
+        process.stdout.write(`Old encrypted backups removed: ${removed.length}\n`);
+      }
       return;
     }
     if (mode === "restore") {

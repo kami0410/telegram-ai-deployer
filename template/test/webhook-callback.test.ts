@@ -34,7 +34,7 @@ function request(
   draftId: string,
   action: "c" | "r" | "x" = "c",
 ): Request {
-  return new Request("https://persona.example/telegram/webhook", {
+  return new Request("https://yuan.example/telegram/webhook", {
     method: "POST",
     headers: { "x-telegram-bot-api-secret-token": "test-only-webhook-secret" },
     body: JSON.stringify({
@@ -50,7 +50,7 @@ function request(
 }
 
 function memoryConflictRequest(updateId: number, conflictId: string, action: "n" | "k"): Request {
-  return new Request("https://persona.example/telegram/webhook", {
+  return new Request("https://yuan.example/telegram/webhook", {
     method: "POST",
     headers: { "x-telegram-bot-api-secret-token": "test-only-webhook-secret" },
     body: JSON.stringify({
@@ -64,6 +64,58 @@ function memoryConflictRequest(updateId: number, conflictId: string, action: "n"
     }),
   });
 }
+
+function adjustmentRequest(updateId: number, data: string): Request {
+  return new Request("https://yuan.example/telegram/webhook", {
+    method: "POST",
+    headers: { "x-telegram-bot-api-secret-token": "test-only-webhook-secret" },
+    body: JSON.stringify({
+      update_id: updateId,
+      callback_query: {
+        id: `callback-${updateId}`,
+        from: { id: 101, is_bot: false },
+        message: { message_id: 90, chat: { id: 201, type: "private" } },
+        data,
+      },
+    }),
+  });
+}
+
+it("opens adjustment choices and stores one narrow reply correction", async () => {
+  const owner = await pairOwner(env.DB, 101, 201, NOW);
+  if (owner === null) throw new Error("owner_fixture_failed");
+  const conversation = await getOrCreateActiveConversation(env.DB, owner.ownerId, NOW);
+  const assistant = await appendMessage(env.DB, {
+    ownerId: owner.ownerId,
+    conversationId: conversation.conversationId,
+    role: "assistant",
+    mode: "persona",
+    content: "你应该这样做呀",
+    createdAt: NOW,
+  });
+  const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+  const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+    calls.push({
+      method: new URL(String(input)).pathname.split("/").at(-1) ?? "",
+      body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+    });
+    return Response.json({ ok: true, result: true });
+  });
+  const deps = { fetcher, queue: { send: async () => undefined }, now: () => NOW + 1 };
+
+  await handleWebhook(adjustmentRequest(6101, `ra:o:${assistant.messageId}`), env, deps);
+  const opened = calls.find((call) => call.method === "editMessageReplyMarkup");
+  expect(JSON.stringify(opened?.body.reply_markup)).toContain("别急着建议");
+  expect(JSON.stringify(opened?.body.reply_markup)).toContain(`ra:f:n:${assistant.messageId}`);
+
+  await handleWebhook(adjustmentRequest(6102, `ra:f:n:${assistant.messageId}`), env, {
+    ...deps,
+    now: () => NOW + 2,
+  });
+  expect(await env.DB.prepare(
+    "SELECT kind FROM reply_feedback WHERE owner_id = ? AND assistant_message_id = ?",
+  ).bind(owner.ownerId, assistant.messageId).first()).toEqual({ kind: "no_advice" });
+});
 
 it("confirms an owned draft idempotently through opaque callback data", async () => {
   const owner = await pairOwner(env.DB, 101, 201, NOW);
@@ -283,10 +335,10 @@ it("returns a Web App button for /settings", async () => {
       text: "/settings",
     },
   };
-  await handleWebhook(new Request("https://persona.example/telegram/webhook", {
+  await handleWebhook(new Request("https://yuan.example/telegram/webhook", {
     method: "POST",
     headers: { "x-telegram-bot-api-secret-token": "test-only-webhook-secret" },
     body: JSON.stringify(update),
   }), env, { fetcher, queue: { send: async () => undefined }, now: () => NOW });
-  expect(JSON.stringify(bodies)).toContain('"web_app":{"url":"https://persona.example/app"}');
+  expect(JSON.stringify(bodies)).toContain('"web_app":{"url":"https://yuan.example/app"}');
 });

@@ -1,0 +1,21 @@
+const HEADERS = {
+  "cache-control": "public, max-age=60",
+  "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  "permissions-policy": "camera=(), microphone=(), geolocation=()",
+  "referrer-policy": "no-referrer",
+  "x-content-type-options": "nosniff",
+} as const;
+
+export function renderPublicPage(now = Math.floor(Date.now() / 1_000)): Response {
+  const beijing = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(now * 1_000));
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Persona Bot</title><style>
+  :root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Microsoft YaHei",sans-serif;--bg:#edf5ff;--panel:rgba(255,255,255,.76);--text:#10233f;--muted:#60738d;--blue:#1683f8;--green:#20a66a;--line:rgba(56,106,168,.13)}*{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--text);background:radial-gradient(circle at 12% 0,rgba(52,150,255,.28),transparent 34%),radial-gradient(circle at 92% 20%,rgba(111,85,232,.16),transparent 30%),var(--bg)}main{width:min(860px,calc(100% - 28px));margin:auto;padding:48px 0}.hero,.card{border:1px solid rgba(255,255,255,.75);background:var(--panel);box-shadow:0 22px 70px rgba(30,87,155,.15);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}.hero{display:grid;grid-template-columns:auto 1fr;gap:20px;align-items:center;padding:30px;border-radius:32px}.avatar{width:88px;height:88px;border-radius:28px;object-fit:cover;box-shadow:0 14px 30px rgba(22,131,248,.28)}.status{display:inline-flex;align-items:center;gap:8px;color:var(--green);font-size:13px;font-weight:750}.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 6px rgba(32,166,106,.12)}h1{margin:8px 0 4px;font-size:40px;letter-spacing:-.055em}.lead{margin:0;color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}.card{min-height:142px;padding:20px;border-radius:24px}.icon{display:grid;width:38px;height:38px;place-items:center;border-radius:13px;background:rgba(22,131,248,.11);color:var(--blue);font-weight:800}.card strong{display:block;margin:20px 0 6px;font-size:17px}.card p{margin:0;color:var(--muted);font-size:13px;line-height:1.55}.foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px;color:var(--muted);font-size:13px}.button{display:inline-flex;min-height:46px;align-items:center;padding:0 18px;border-radius:15px;background:var(--blue);color:#fff;text-decoration:none;font-weight:750;box-shadow:0 10px 24px rgba(22,131,248,.28)}@media(max-width:640px){main{padding:18px 0 30px}.hero{padding:22px;border-radius:26px}.avatar{width:70px;height:70px;border-radius:22px}h1{font-size:31px}.grid{grid-template-columns:1fr}.card{min-height:auto}.foot{align-items:flex-start;flex-direction:column}}@media(prefers-color-scheme:dark){:root{--bg:#071220;--panel:rgba(16,34,56,.78);--text:#edf6ff;--muted:#9db0c8;--line:rgba(255,255,255,.1)}.hero,.card{border-color:rgba(255,255,255,.1)}}@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.hero,.card{background:var(--panel)}}
+  </style></head><body><main><section class="hero"><img class="avatar" src="/app/avatar" alt="Persona 的 Telegram 头像"><div><span class="status"><span class="dot"></span>Persona 在线</span><h1>Persona Bot</h1><p class="lead">一个拥有长期记忆、保持边界并尊重隐私的私人聊天机器人。</p></div></section><section class="grid"><article class="card"><span class="icon">AI</span><strong>DeepSeek Flash</strong><p>以较低成本提供自然、简短的日常文字对话。</p></article><article class="card"><span class="icon">∞</span><strong>长期记忆与语义检索</strong><p>D1 保存结构化数据，Vectorize 只负责寻找相关记忆。</p></article><article class="card"><span class="icon">◎</span><strong>隐私优先</strong><p>公开页面不会呈现任何私人聊天、账户数据或内部密钥。</p></article></section><footer class="foot"><span>状态更新时间（北京时间）：${beijing}</span><a class="button" href="/app">Telegram 身份验证</a></footer></main></body></html>`;
+  return new Response(html, {
+    headers: { ...HEADERS, "content-type": "text/html; charset=utf-8" },
+  });
+}

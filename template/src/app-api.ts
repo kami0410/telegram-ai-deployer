@@ -1,4 +1,3 @@
-import { getOwner } from "./storage/owner-repository";
 import {
   cancelPersonaDraft,
   deleteEpisode,
@@ -19,7 +18,15 @@ import {
   rollbackPersona,
   type PersonaPatchInput,
 } from "./storage/persona-repository";
+import {
+  clearSessionCookie,
+  cookieValue,
+  createAppSession,
+  sessionCookie,
+  verifyAppSession,
+} from "./app-session";
 import { verifyTelegramInitData } from "./telegram-init-data";
+import { getOwner } from "./storage/owner-repository";
 import { claimUpdate, markUpdate } from "./storage/update-repository";
 import {
   getMemoryConflict,
@@ -38,6 +45,19 @@ import {
   listRelationshipTimeline,
   updateRelationshipTimelineItem,
 } from "./storage/realism-repository";
+import {
+  getRecallTrace,
+  listRecallTraces,
+} from "./storage/memory-recall-repository";
+import {
+  getActiveIdentityCore,
+  listIdentityCandidates,
+  promoteIdentityCandidate,
+  rejectIdentityCandidate,
+  revertIdentityCoreEntry,
+} from "./storage/identity-core-repository";
+import { getProactiveStats } from "./storage/proactive-decision-repository";
+import { getQualityEventStats } from "./quality-events";
 
 const MAX_BODY_BYTES = 16 * 1_024;
 const JSON_HEADERS = {
@@ -106,23 +126,47 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
 }
 
 async function authenticate(request: Request, env: Env, now: number): Promise<number> {
-  const initData = request.headers.get("telegram-init-data");
-  if (initData === null || initData.length === 0) throw new HttpError(401, "unauthorized");
-  let identity;
-  try {
-    identity = await verifyTelegramInitData(initData, env.TELEGRAM_BOT_TOKEN, now);
-  } catch {
+  const token = cookieValue(request);
+  if (token === null) throw new HttpError(401, "unauthorized");
+  const session = await verifyAppSession(token, env.TELEGRAM_BOT_TOKEN, now);
+  if (session === null) throw new HttpError(401, "unauthorized");
+  const owner = await getOwner(env.DB);
+  if (
+    owner === null ||
+    owner.ownerId !== session.ownerId ||
+    owner.telegramUserId !== session.telegramUserId
+  ) {
     throw new HttpError(401, "unauthorized");
+  }
+  return session.ownerId;
+}
+
+async function login(request: Request, env: Env, now: number): Promise<Response> {
+  const body = await readJson(request);
+  if (typeof body.initData !== "string" || body.initData.length === 0) {
+    throw new HttpError(400, "invalid_init_data");
+  }
+  let verified;
+  try {
+    verified = await verifyTelegramInitData(body.initData, env.TELEGRAM_BOT_TOKEN, now);
+  } catch {
+    throw new HttpError(401, "invalid_init_data");
   }
   const owner = await getOwner(env.DB);
   if (
     owner === null ||
-    identity.userId !== owner.telegramUserId ||
-    identity.chatId !== owner.telegramChatId
+    owner.telegramUserId !== verified.userId ||
+    owner.telegramChatId !== verified.chatId
   ) {
-    throw new HttpError(403, "forbidden");
+    throw new HttpError(403, "not_bound");
   }
-  return owner.ownerId;
+  const token = await createAppSession(
+    owner.ownerId,
+    verified.userId,
+    env.TELEGRAM_BOT_TOKEN,
+    now,
+  );
+  return json({ ok: true }, 200, { "set-cookie": sessionCookie(token) });
 }
 
 async function audit(
@@ -148,10 +192,24 @@ async function route(
   const url = new URL(request.url);
   const path = url.pathname;
   if (path === "/api/app/overview" && request.method === "GET") {
-    return json(await getManagementOverview(env.DB, ownerId));
+    return json({
+      ...await getManagementOverview(env.DB, ownerId),
+      runtime: {
+        status: "online",
+        model: env.DEEPSEEK_MODEL,
+        memory: "D1 + Vectorize",
+        checkedAt: now,
+      },
+    });
   }
   if (path === "/api/app/chat-preferences" && request.method === "GET") {
     return json(await getChatPreferences(env.DB, ownerId));
+  }
+  if (path === "/api/app/proactive-stats" && request.method === "GET") {
+    return json({ items: await getProactiveStats(env.DB, ownerId, now - 7 * 86_400) });
+  }
+  if (path === "/api/app/quality-stats" && request.method === "GET") {
+    return json({ items: await getQualityEventStats(env.DB, ownerId, now - 7 * 86_400) });
   }
   if (path === "/api/app/chat-preferences" && request.method === "PATCH") {
     const body = await readJson(request);
@@ -200,6 +258,14 @@ async function route(
   }
   if (path === "/api/app/reply-memory-usage" && request.method === "GET") {
     return json({ items: await listReplyMemoryUsage(env.DB, ownerId, 20) });
+  }
+  if (path === "/api/app/memory-recalls" && request.method === "GET") {
+    return json({ items: await listRecallTraces(env.DB, ownerId, 20) });
+  }
+  const recallMatch = path.match(/^\/api\/app\/memory-recalls\/(\d+)$/u);
+  if (recallMatch !== null && request.method === "GET") {
+    const item = await getRecallTrace(env.DB, ownerId, asSafeId(recallMatch[1] ?? ""));
+    return item === null ? json({ error: "not_found" }, 404) : json(item);
   }
   if (path === "/api/app/relationship-timeline" && request.method === "GET") {
     return json({ items: await listRelationshipTimeline(env.DB, ownerId) });
@@ -327,6 +393,23 @@ async function route(
       versions: await listPersonaVersions(env.DB, ownerId),
     });
   }
+  if (path === "/api/app/identity-core" && request.method === "GET") {
+    const [entries, candidates] = await Promise.all([
+      getActiveIdentityCore(env.DB, ownerId), listIdentityCandidates(env.DB, ownerId),
+    ]);
+    return json({ entries, candidates });
+  }
+  const identityMatch = path.match(/^\/api\/app\/identity-core\/(\d+)\/(confirm|reject|revert)$/u);
+  if (identityMatch !== null && request.method === "POST") {
+    const id = asSafeId(identityMatch[1] ?? ""); const action = identityMatch[2];
+    const changed = action === "confirm"
+      ? await promoteIdentityCandidate(env.DB, ownerId, id, now)
+      : action === "reject"
+        ? await rejectIdentityCandidate(env.DB, ownerId, id, now)
+        : await revertIdentityCoreEntry(env.DB, ownerId, id, now);
+    await audit(env.DB, ownerId, action ?? "update", "identity_core", String(id), changed ? "ok" : "not_found", now);
+    return changed ? json({ ok: true }) : json({ error: "not_found" }, 404);
+  }
   if (path === "/api/app/persona/rollback" && request.method === "POST") {
     const body = await readJson(request);
     if (!Number.isSafeInteger(body.targetVersion) || (body.targetVersion as number) < 1) {
@@ -439,7 +522,17 @@ export async function handleAppApi(
   now = Math.floor(Date.now() / 1_000),
 ): Promise<Response> {
   try {
+    const path = new URL(request.url).pathname;
+    if (path === "/api/app/login" && request.method === "POST") {
+      return await login(request, env, now);
+    }
+    if (path === "/api/app/logout" && request.method === "POST") {
+      return json({ ok: true }, 200, { "set-cookie": clearSessionCookie() });
+    }
     const ownerId = await authenticate(request, env, now);
+    if (path === "/api/app/session" && request.method === "GET") {
+      return json({ ok: true });
+    }
     return await route(request, env, ownerId, now);
   } catch (error) {
     if (error instanceof HttpError) return json({ error: error.code }, error.status);

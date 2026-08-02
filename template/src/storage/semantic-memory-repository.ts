@@ -249,7 +249,11 @@ export async function loadSemanticRecords(
   for (const record of records) {
     if (record.kind === "fact") {
       const row = await db.prepare(
-        `SELECT fact_key, fact_value, category, confidence, last_used_at
+        `SELECT fact_key, fact_value, category, confidence, last_used_at,
+                source_message_id, updated_at,
+                COALESCE((SELECT control FROM memory_controls
+                  WHERE owner_id = memory_facts.owner_id AND entity_kind = 'fact'
+                    AND entity_id = memory_facts.id), 'normal') AS control
          FROM memory_facts WHERE id = ? AND owner_id = ?
            AND NOT EXISTS (SELECT 1 FROM memory_controls
              WHERE owner_id = memory_facts.owner_id AND entity_kind = 'fact'
@@ -260,6 +264,9 @@ export async function loadSemanticRecords(
         category: string;
         confidence: MemoryConfidence;
         last_used_at: number | null;
+        source_message_id: number | null;
+        updated_at: number;
+        control: "normal" | "pinned" | "ignored";
       }>();
       if (row !== null && !(options.automaticOnlyAt !== undefined && row.last_used_at !== null &&
         options.automaticOnlyAt - row.last_used_at < 12 * 3_600)) loaded.push({
@@ -270,10 +277,18 @@ export async function loadSemanticRecords(
         category: row.category,
         confidence: row.confidence,
         priorityScore: 400,
+        retrievalChannel: "semantic",
+        updatedAt: row.updated_at,
+        ...(row.source_message_id === null ? {} : { sourceMessageId: row.source_message_id }),
+        control: row.control,
       });
     } else {
       const row = await db.prepare(
-        `SELECT content, category, people_json, topics_json, auto_inject_until, last_used_at
+        `SELECT content, category, people_json, topics_json, auto_inject_until, last_used_at,
+                source_message_id, updated_at,
+                COALESCE((SELECT control FROM memory_controls
+                  WHERE owner_id = memory_episodes.owner_id AND entity_kind = 'episode'
+                    AND entity_id = memory_episodes.id), 'normal') AS control
          FROM memory_episodes
          WHERE id = ? AND owner_id = ? AND status = 'active'
            AND NOT EXISTS (SELECT 1 FROM memory_controls
@@ -286,6 +301,9 @@ export async function loadSemanticRecords(
         topics_json: string;
         auto_inject_until: number;
         last_used_at: number | null;
+        source_message_id: number;
+        updated_at: number;
+        control: "normal" | "pinned" | "ignored";
       }>();
       if (
         row !== null &&
@@ -301,6 +319,10 @@ export async function loadSemanticRecords(
           category: row.category,
           confidence: "medium",
           priorityScore: 250,
+          retrievalChannel: "semantic",
+          updatedAt: row.updated_at,
+          sourceMessageId: row.source_message_id,
+          control: row.control,
         });
       }
     }

@@ -46,7 +46,7 @@ Use a disposable Telegram test bot and isolated Cloudflare resource prefix. Neve
 - [ ] Telegram and DeepSeek credentials validate without appearing in logs or state.
 - [ ] Final Worker health endpoint returns HTTP 200.
 - [ ] Telegram `setWebhook` succeeds with webhook-secret verification enabled.
-- [ ] A text message receives a response using the selected model and thinking mode.
+- [ ] A text message receives a response using the selected model; `/ask` uses thinking mode.
 - [ ] Resume succeeds after an intentionally recoverable interruption and requires secrets again.
 - [ ] Test bot webhook and every isolated Cloudflare resource are removed after acceptance.
 

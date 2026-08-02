@@ -8,6 +8,7 @@ import {
   recordManagementEvent,
   updateMemory,
 } from "../src/storage/management-repository";
+import { setMemoryControl } from "../src/storage/memory-control-repository";
 
 const NOW = 1_800_000_000;
 
@@ -47,6 +48,14 @@ describe("management repository", () => {
       memoryCount: 1,
       memoryByCategory: { study: 1 },
     });
+  });
+
+  it("returns pinned and ignored control state", async () => {
+    const { ownerId, memoryId } = await fixture();
+    await setMemoryControl(env.DB, ownerId, "fact", memoryId, "pinned", NOW + 1);
+    expect((await listMemories(env.DB, ownerId)).items[0]).toMatchObject({ control: "pinned" });
+    await setMemoryControl(env.DB, ownerId, "fact", memoryId, "ignored", NOW + 2);
+    expect((await listMemories(env.DB, ownerId)).items[0]).toMatchObject({ control: "ignored" });
   });
 
   it("updates only an owned memory with optimistic updated_at", async () => {

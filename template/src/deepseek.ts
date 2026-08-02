@@ -3,6 +3,12 @@ import {
   canonicalPersonaJson,
   type PersonaSnapshot,
 } from "./persona/seed";
+import type {
+  MemoryGraphEdgeInput,
+  MemoryGraphNodeInput,
+  MemoryGraphNodeType,
+  MemoryGraphRelation,
+} from "./storage/memory-graph-repository";
 
 const CHAT_COMPLETIONS_URL = "https://api.deepseek.com/chat/completions";
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1_024 * 1_024;
@@ -21,6 +27,8 @@ export interface DeepSeekUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  promptCacheHitTokens: number;
+  promptCacheMissTokens: number;
 }
 
 export interface DeepSeekChatResult {
@@ -59,6 +67,8 @@ interface CompletionEnvelope {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
   };
 }
 
@@ -91,6 +101,14 @@ function parseCompletionEnvelope(value: unknown): CompletionEnvelope {
   ) {
     throw new DeepSeekError("invalid_response", 200, false);
   }
+  const promptCacheHitTokens = usage.prompt_cache_hit_tokens ?? 0;
+  const promptCacheMissTokens = usage.prompt_cache_miss_tokens ?? 0;
+  if (
+    !isNonNegativeInteger(promptCacheHitTokens) ||
+    !isNonNegativeInteger(promptCacheMissTokens)
+  ) {
+    throw new DeepSeekError("invalid_response", 200, false);
+  }
 
   return {
     choices: [{ message: { content } }],
@@ -98,6 +116,8 @@ function parseCompletionEnvelope(value: unknown): CompletionEnvelope {
       prompt_tokens: usage.prompt_tokens,
       completion_tokens: usage.completion_tokens,
       total_tokens: usage.total_tokens,
+      prompt_cache_hit_tokens: promptCacheHitTokens,
+      prompt_cache_miss_tokens: promptCacheMissTokens,
     },
   };
 }
@@ -201,6 +221,8 @@ async function requestCompletion(
       inputTokens: envelope.usage.prompt_tokens,
       outputTokens: envelope.usage.completion_tokens,
       totalTokens: envelope.usage.total_tokens,
+      promptCacheHitTokens: envelope.usage.prompt_cache_hit_tokens ?? 0,
+      promptCacheMissTokens: envelope.usage.prompt_cache_miss_tokens ?? 0,
     },
   };
 }
@@ -300,6 +322,9 @@ export interface MemoryUpdateResult {
   episodes: ExtractedMemoryEpisode[];
   relationshipStates: ExtractedRelationshipState[];
   timeLayers: ExtractedTimeMemoryLayer[];
+  graphNodes: MemoryGraphNodeInput[];
+  graphEdges: MemoryGraphEdgeInput[];
+  identityEvidence: Array<{ identityKey: string; identityValue: string; sourceMessageId: number }>;
   usage: DeepSeekUsage;
 }
 
@@ -412,6 +437,9 @@ function parseMemoryUpdate(
     ? parsed.relationship_states
     : [];
   const timeLayers = isRecord(parsed.time_layers) ? parsed.time_layers : {};
+  const graphNodes = Array.isArray(parsed.graph_nodes) ? parsed.graph_nodes : [];
+  const graphEdges = Array.isArray(parsed.graph_edges) ? parsed.graph_edges : [];
+  const identityEvidence = Array.isArray(parsed.identity_evidence) ? parsed.identity_evidence : [];
   const normalizedFacts: ExtractedMemoryFact[] = facts
     .slice(0, 50)
     .flatMap((fact, index) => {
@@ -503,6 +531,79 @@ function parseMemoryUpdate(
     }];
   });
 
+  const allowedGraphNodeTypes = new Set<MemoryGraphNodeType>([
+    "person", "event", "topic", "goal", "place", "time",
+  ]);
+  const normalizedGraphNodes: MemoryGraphNodeInput[] = graphNodes
+    .slice(0, 50)
+    .flatMap((node) => {
+      if (!isRecord(node) || !allowedGraphNodeTypes.has(node.type as MemoryGraphNodeType)) {
+        return [];
+      }
+      const key = normalizeText(node.key, 120);
+      const value = normalizeText(node.value, 1_000);
+      if (key.length === 0 || value.length === 0) return [];
+      const sourceMessageId = resolveUserSourceMessageId(
+        sourceMessages,
+        node.source_message_id,
+        node.evidence,
+        value,
+      );
+      if (sourceMessageId === null) return [];
+      return [{
+        type: node.type as MemoryGraphNodeType,
+        key,
+        value,
+        confidence: normalizeConfidence(node.confidence),
+        sourceMessageId,
+        ...(node.supersedes === true ? { supersedes: true } : {}),
+      }];
+    });
+  const allowedGraphRelations = new Set<MemoryGraphRelation>([
+    "involves", "occurred_at", "related_to", "supports", "updates", "conflicts_with",
+  ]);
+  const normalizedGraphEdges: MemoryGraphEdgeInput[] = graphEdges
+    .slice(0, 50)
+    .flatMap((edge) => {
+      if (
+        !isRecord(edge) ||
+        !allowedGraphNodeTypes.has(edge.from_type as MemoryGraphNodeType) ||
+        !allowedGraphNodeTypes.has(edge.to_type as MemoryGraphNodeType) ||
+        !allowedGraphRelations.has(edge.relation as MemoryGraphRelation)
+      ) return [];
+      const fromKey = normalizeText(edge.from_key, 120);
+      const toKey = normalizeText(edge.to_key, 120);
+      if (fromKey.length === 0 || toKey.length === 0) return [];
+      const sourceMessageId = resolveUserSourceMessageId(
+        sourceMessages,
+        edge.source_message_id,
+        edge.evidence,
+        `${fromKey} ${toKey}`,
+      );
+      if (sourceMessageId === null) return [];
+      return [{
+        fromType: edge.from_type as MemoryGraphNodeType,
+        fromKey,
+        toType: edge.to_type as MemoryGraphNodeType,
+        toKey,
+        relation: edge.relation as MemoryGraphRelation,
+        confidence: normalizeConfidence(edge.confidence),
+        sourceMessageId,
+      }];
+    });
+
+  const normalizedIdentityEvidence = identityEvidence.slice(0, 20).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const identityKey = normalizeFactKey(item.identity_key, lastMessageId, 0);
+    const identityValue = normalizeText(item.identity_value ?? item.value, 500);
+    if (identityValue.length === 0) return [];
+    const sourceMessageId = resolveUserSourceMessageId(
+      sourceMessages, item.source_message_id, item.evidence, identityValue,
+    );
+    if (sourceMessageId === null) return [];
+    return [{ identityKey, identityValue, sourceMessageId }];
+  });
+
   return {
     summary: normalizeText(summary, 8_000),
     throughMessageId: lastMessageId,
@@ -510,6 +611,9 @@ function parseMemoryUpdate(
     episodes: normalizedEpisodes,
     relationshipStates: normalizedRelationshipStates,
     timeLayers: normalizedTimeLayers,
+    graphNodes: normalizedGraphNodes,
+    graphEdges: normalizedGraphEdges,
+    identityEvidence: normalizedIdentityEvidence,
   };
 }
 
@@ -526,7 +630,7 @@ export async function requestMemoryUpdate(
       {
         role: "system",
         content:
-          "仅从用户明确说出的内容更新摘要和记忆，不得从助手回复推断。输出 JSON：summary、through_message_id、stable_facts、episodes、relationship_states、time_layers。stable_facts 只放长期稳定事实；短期情绪和一次性事件放 episodes；relationship_states 只放仍有后续价值的关系状态，kind 仅可为 open_thread、emotional_state、commitment、shared_moment、interaction_outcome，每项包含 kind、value、source_message_id、evidence。open_thread 仅用于用户明确提到、之后确实可能有结果或后续的考试、约定、等待结果、计划和未完成事项；普通闲聊、已经结束的事情、助手提出的问题不得标成 open_thread。time_layers 必须包含 topic、week、month、relationship 四个对象，每个对象只含 summary、topics、importance；在对应 previousTimeLayers 基础上压缩更新，topic 聚焦当前话题，week 聚焦本周，month 聚焦本月，relationship 只保留有明确用户证据的长期关系脉络。importance 为 1 至 5。所有新增信息必须来自本批用户消息；不得从助手话语、人格资料或推测创造共同经历、约定、感情结论或 Persona 的现实活动。",
+          "仅从用户明确说出的内容更新摘要和记忆，不得从助手回复推断。输出 JSON：summary、through_message_id、stable_facts、episodes、relationship_states、time_layers、graph_nodes、graph_edges、identity_evidence。stable_facts 只放长期稳定事实；短期情绪和一次性事件放 episodes；relationship_states 只放仍有后续价值的关系状态，kind 仅可为 open_thread、emotional_state、commitment、shared_moment、interaction_outcome，每项包含 kind、value、source_message_id、evidence。identity_evidence 只记录用户对 Persona 稳定表达、价值观、边界或推理方式的明确描述，每项包含 identity_key、identity_value、source_message_id、evidence；一次观察仍只是候选，不得写用户本人特征、感情结论或推测。graph_nodes 的 type 仅可为 person、event、topic、goal、place、time，每项包含 type、key、value、confidence、source_message_id、evidence；只有用户明确表示新事实替代旧事实时才可加 supersedes:true。graph_edges 的 relation 仅可为 involves、occurred_at、related_to、supports、updates、conflicts_with，并包含 from_type、from_key、to_type、to_key、confidence、source_message_id、evidence。open_thread 仅用于用户明确提到、之后确实可能有结果或后续的考试、约定、等待结果、计划和未完成事项；普通闲聊、已经结束的事情、助手提出的问题不得标成 open_thread。time_layers 必须包含 topic、week、month、relationship 四个对象，每个对象只含 summary、topics、importance；在对应 previousTimeLayers 基础上压缩更新，topic 聚焦当前话题，week 聚焦本周，month 聚焦本月，relationship 只保留有明确用户证据的长期关系脉络。importance 为 1 至 5。所有新增信息必须来自本批用户消息；不得从助手话语、人格资料或推测创造共同经历、约定、感情结论或 Persona 的现实活动。",
       },
       {
         role: "user",
@@ -822,6 +926,10 @@ export async function requestPersonaDraft(
       inputTokens: first.usage.inputTokens + second.usage.inputTokens,
       outputTokens: first.usage.outputTokens + second.usage.outputTokens,
       totalTokens: first.usage.totalTokens + second.usage.totalTokens,
+      promptCacheHitTokens:
+        first.usage.promptCacheHitTokens + second.usage.promptCacheHitTokens,
+      promptCacheMissTokens:
+        first.usage.promptCacheMissTokens + second.usage.promptCacheMissTokens,
     },
   };
 }

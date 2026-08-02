@@ -16,6 +16,10 @@ import { claimUpdate, markUpdate } from "../src/storage/update-repository";
 import type { QueueJob, RandomSource } from "../src/queue";
 import { processQueueMessage, type QueueDependencies } from "../src/queue";
 import { vi } from "vitest";
+import {
+  noteProactiveSent,
+  updateChatPreferences,
+} from "../src/storage/chat-preferences-repository";
 
 const MONDAY = Math.floor(Date.parse("2026-07-20T00:00:00Z") / 1_000);
 
@@ -101,7 +105,7 @@ it("queues bounded pending vector synchronization work", async () => {
   expect(deps.jobs).toContainEqual({ type: "memory_vector_sync", ownerId });
 });
 
-it("requeues an overdue persona memory summary from the scheduled recovery pass", async () => {
+it("requeues an overdue Persona memory summary from the scheduled recovery pass", async () => {
   const ownerId = await fixture();
   const conversation = await getOrCreateActiveConversation(env.DB, ownerId, MONDAY);
   for (let index = 0; index < 16; index += 1) {
@@ -147,6 +151,53 @@ describe("daily proactive schedule", () => {
     expect(new Date(lateNight * 1_000).getUTCHours()).toBeGreaterThanOrEqual(0);
   });
 
+  it("honors disable, custom range and automatic unanswered reduction", async () => {
+    const ownerId = await fixture();
+    await updateChatPreferences(env.DB, ownerId, {
+      proactiveEnabled: false,
+      dailyMin: 1,
+      dailyMax: 1,
+      quietStartMinute: null,
+      quietEndMinute: null,
+      pausedUntil: null,
+    }, MONDAY);
+    const disabled = dependencies(() => MONDAY);
+    await handleScheduled(env, disabled.value);
+    expect(disabled.jobs.some((job) => job.type === "proactive")).toBe(false);
+
+    await updateChatPreferences(env.DB, ownerId, {
+      proactiveEnabled: true,
+      dailyMin: 2,
+      dailyMax: 3,
+      quietStartMinute: null,
+      quietEndMinute: null,
+      pausedUntil: null,
+    }, MONDAY + 1);
+    await noteProactiveSent(env.DB, ownerId, MONDAY + 2);
+    await noteProactiveSent(env.DB, ownerId, MONDAY + 3);
+    const reduced = dependencies(() => MONDAY + 4, source([0xffff_ffff]));
+    await handleScheduled(env, reduced.value);
+    expect(await env.DB.prepare(
+      "SELECT weekly_target FROM persona_runtime_state WHERE owner_id = ?",
+    ).bind(ownerId).first()).toEqual({ weekly_target: 0 });
+  });
+
+  it("does not send during configured Beijing quiet hours", async () => {
+    const ownerId = await fixture();
+    const quietNow = Date.UTC(2026, 6, 20, 16, 30) / 1_000;
+    await updateChatPreferences(env.DB, ownerId, {
+      proactiveEnabled: true,
+      dailyMin: 2,
+      dailyMax: 3,
+      quietStartMinute: 23 * 60,
+      quietEndMinute: 7 * 60,
+      pausedUntil: null,
+    }, quietNow - 1);
+    const deps = dependencies(() => quietNow);
+    await handleScheduled(env, deps.value);
+    expect(deps.jobs.some((job) => job.type === "proactive")).toBe(false);
+  });
+
   it("sends twice in one Beijing day even when the first contact gets no reply", async () => {
     const ownerId = await fixture();
     await env.DB
@@ -189,30 +240,6 @@ describe("daily proactive schedule", () => {
         .bind(ownerId)
         .first(),
     ).toEqual({ next_proactive_at: null });
-  });
-
-  it("does not let historical failed updates block a due proactive contact", async () => {
-    const ownerId = await fixture();
-    await env.DB
-      .prepare(
-        `INSERT INTO persona_runtime_state (
-           owner_id, next_proactive_at, week_start, weekly_target,
-           weekly_sent, updated_at
-         ) VALUES (?, ?, '2026-07-20', 1, 0, ?)`,
-      )
-      .bind(ownerId, MONDAY, MONDAY)
-      .run();
-    await claimUpdate(env.DB, 9100, ownerId, MONDAY - 86_400);
-    await markUpdate(env.DB, 9100, "failed", MONDAY - 86_399, "invalid_response");
-    const deps = dependencies(() => MONDAY, source([0]));
-
-    await handleScheduled(env, deps.value);
-
-    expect(deps.jobs).toContainEqual({
-      type: "proactive",
-      ownerId,
-      scheduledAt: MONDAY,
-    });
   });
 
   it("suppresses proactive contact while a user message is pending", async () => {
@@ -267,6 +294,30 @@ describe("daily proactive schedule", () => {
     now = due + 100;
     await handleScheduled(env, deps.value);
     expect(deps.jobs).toHaveLength(1);
+  });
+
+  it("does not let historical failed updates block a due proactive contact", async () => {
+    const ownerId = await fixture();
+    await env.DB
+      .prepare(
+        `INSERT INTO persona_runtime_state (
+           owner_id, next_proactive_at, week_start, weekly_target,
+           weekly_sent, updated_at
+         ) VALUES (?, ?, '2026-07-20', 1, 0, ?)`,
+      )
+      .bind(ownerId, MONDAY, MONDAY)
+      .run();
+    await claimUpdate(env.DB, 9100, ownerId, MONDAY - 86_400);
+    await markUpdate(env.DB, 9100, "failed", MONDAY - 86_399, "invalid_response");
+    const deps = dependencies(() => MONDAY, source([0]));
+
+    await handleScheduled(env, deps.value);
+
+    expect(deps.jobs).toContainEqual({
+      type: "proactive",
+      ownerId,
+      scheduledAt: MONDAY,
+    });
   });
 
   it("resets at the start of a new Beijing day", async () => {
@@ -370,11 +421,9 @@ describe("proactive queue content", () => {
     );
 
     expect(bodies).toHaveLength(1);
+    expect(JSON.parse(bodies[0] ?? "{}")).toMatchObject({ max_tokens: 70 });
     expect(bodies[0]).toContain("[PROACTIVE_CONTACT]");
-    expect(bodies[0]).toContain("学习和生活");
-    expect(bodies[0]).toContain("延续旧话题");
-    expect(bodies[0]).toContain("轻松问题或观点");
-    expect(bodies[0]).toContain("休息或吃饭");
+    expect(bodies[0]).toContain("提醒休息、吃饭或别给自己太大压力");
     expect(bodies[0]).toContain("不得虚构");
     expect(bodies[0]).toContain("即使上一次主动联系没有回复");
     expect(

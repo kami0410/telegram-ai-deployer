@@ -16,7 +16,7 @@ const input = {
 test("normalizes a safe deployment input", () => {
   const result = validateDeploymentInput(input);
   assert.equal(result.projectName, "example-bot");
-  assert.equal(result.thinking, "disabled");
+  assert.equal(result.model, "deepseek-v4-flash");
 });
 
 test("requires disclaimer acceptance and a whitelisted model", () => {

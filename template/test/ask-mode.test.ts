@@ -29,7 +29,7 @@ beforeEach(async () => {
   `);
 });
 
-it("keeps /ask prompts and answers out of Persona Bot persona and memory", async () => {
+it("keeps /ask prompts and answers out of Persona persona and memory", async () => {
   const owner = await pairOwner(env.DB, 101, 201, NOW);
   expect(owner).not.toBeNull();
   if (owner === null) return;
@@ -80,11 +80,11 @@ it("keeps /ask prompts and answers out of Persona Bot persona and memory", async
 
   expect(bodies).toHaveLength(1);
   expect(JSON.parse(bodies[0] ?? "{}")).toMatchObject({
-    model: "deepseek-v4-pro",
+    model: env.DEEPSEEK_MODEL,
     thinking: { type: "enabled" },
   });
   expect(bodies[0]).toContain("[ASK_MODE_NON_LEARNING]");
-  expect(bodies[0]).not.toContain("Persona Bot 与 OWNER");
+  expect(bodies[0]).not.toContain("Persona 与 OWNER");
   expect(bodies[0]).not.toContain("🌚");
   expect(
     await env.DB.prepare("SELECT COUNT(*) AS count FROM persona_versions").first(),

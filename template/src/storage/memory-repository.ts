@@ -14,6 +14,7 @@ interface MemoryFactRow {
   created_at: number;
   updated_at: number;
   last_used_at: number | null;
+  source_message_id: number | null;
   control: "normal" | "pinned";
 }
 
@@ -118,7 +119,7 @@ export async function getRelevantMemoryFacts(
 ): Promise<PromptMemoryFact[]> {
   const result = await db
     .prepare(
-      `SELECT id, category, fact_key, fact_value, confidence,
+      `SELECT id, category, fact_key, fact_value, confidence, source_message_id,
               created_at, updated_at, last_used_at,
               COALESCE((SELECT control FROM memory_controls
                 WHERE owner_id = memory_facts.owner_id AND entity_kind = 'fact'
@@ -155,6 +156,7 @@ export async function getRelevantMemoryFacts(
           (row.control === "pinned" ? 500 : 0),
         control: row.control,
         updatedAt: row.updated_at,
+        sourceMessageId: row.source_message_id,
       };
     })
     .filter((fact) =>
@@ -182,5 +184,9 @@ export async function getRelevantMemoryFacts(
     }
   }
 
-  return ranked.map(({ id: _id, updatedAt: _updatedAt, topic: _topic, control: _control, ...fact }) => fact);
+  return ranked.map(({ id: _id, topic: _topic, sourceMessageId, ...fact }) => ({
+    ...fact,
+    retrievalChannel: fact.control === "pinned" ? "pinned" as const : "lexical" as const,
+    ...(sourceMessageId === null ? {} : { sourceMessageId }),
+  }));
 }

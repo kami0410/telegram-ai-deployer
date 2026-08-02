@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   appendMessage,
   closeActiveConversation,
-  countUnsummarizedMessages,
   getLatestConversationSummary,
+  getPersonaMessagesAfter,
   getOrCreateActiveConversation,
   getRecentMessages,
   saveConversationSummary,
@@ -14,6 +14,7 @@ import {
   upsertMemoryFacts,
 } from "../src/storage/memory-repository";
 import { pairOwner } from "../src/storage/owner-repository";
+import { setMemoryControl } from "../src/storage/memory-control-repository";
 import {
   addDailyTokenUsage,
   getDailyUsage,
@@ -41,52 +42,38 @@ async function ownerId(): Promise<number> {
 }
 
 describe("durable conversations", () => {
-  it("counts only unsummarized persona messages", async () => {
+  it("reads the oldest unsummarized Persona messages first", async () => {
     const owner = await ownerId();
     const conversation = await getOrCreateActiveConversation(env.DB, owner, NOW + 1);
-    const first = await appendMessage(env.DB, {
-      ownerId: owner,
-      conversationId: conversation.conversationId,
-      role: "user",
-      mode: "persona",
-      content: "first message",
-      createdAt: NOW + 2,
-    });
-    const second = await appendMessage(env.DB, {
-      ownerId: owner,
-      conversationId: conversation.conversationId,
-      role: "assistant",
-      mode: "persona",
-      content: "second message",
-      createdAt: NOW + 3,
-    });
+    const messages = [];
+    for (let index = 0; index < 45; index += 1) {
+      messages.push(await appendMessage(env.DB, {
+        ownerId: owner,
+        conversationId: conversation.conversationId,
+        role: index % 2 === 0 ? "user" : "assistant",
+        mode: "persona",
+        content: `消息 ${index}`,
+        createdAt: NOW + 2 + index,
+      }));
+    }
     await saveConversationSummary(env.DB, {
       conversationId: conversation.conversationId,
-      fromMessageId: first.messageId,
-      throughMessageId: second.messageId,
-      summary: "first two messages",
-      createdAt: NOW + 4,
-    });
-    await appendMessage(env.DB, {
-      ownerId: owner,
-      conversationId: conversation.conversationId,
-      role: "user",
-      mode: "persona",
-      content: "third message",
-      createdAt: NOW + 5,
-    });
-    await appendMessage(env.DB, {
-      ownerId: owner,
-      conversationId: conversation.conversationId,
-      role: "user",
-      mode: "ask",
-      content: "ask message not counted",
-      createdAt: NOW + 6,
+      fromMessageId: messages[0]!.messageId,
+      throughMessageId: messages[1]!.messageId,
+      summary: "前两条消息的摘要",
+      createdAt: NOW + 50,
     });
 
-    expect(
-      await countUnsummarizedMessages(env.DB, conversation.conversationId),
-    ).toBe(1);
+    const pending = await getPersonaMessagesAfter(
+      env.DB,
+      conversation.conversationId,
+      messages[1]!.messageId,
+      40,
+    );
+
+    expect(pending).toHaveLength(40);
+    expect(pending[0]?.messageId).toBe(messages[2]!.messageId);
+    expect(pending.at(-1)?.messageId).toBe(messages[41]!.messageId);
   });
 
   it("retains full messages when adding rolling summaries", async () => {
@@ -114,7 +101,7 @@ describe("durable conversations", () => {
       conversationId: conversation.conversationId,
       fromMessageId: first.messageId,
       throughMessageId: second.messageId,
-      summary: "OWNER 在准备考试，Persona Bot 表示理解。",
+      summary: "OWNER 在准备考试，Persona 表示理解。",
       createdAt: NOW + 4,
     });
 
@@ -223,6 +210,33 @@ describe("grounded long-term facts", () => {
       await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_facts").first(),
     ).toEqual({ count: 0 });
   });
+
+  it("excludes ignored facts and gives pinned facts bounded recall priority", async () => {
+    const owner = await ownerId();
+    const conversation = await getOrCreateActiveConversation(env.DB, owner, NOW + 1);
+    const source = await appendMessage(env.DB, {
+      ownerId: owner,
+      conversationId: conversation.conversationId,
+      role: "user",
+      mode: "persona",
+      content: "我喜欢蓝莓，也准备高数考试",
+      createdAt: NOW + 2,
+    });
+    await upsertMemoryFacts(env.DB, owner, conversation.conversationId, [
+      { category: "preference", factKey: "fruit", factValue: "OWNER 喜欢蓝莓", confidence: "high", sourceMessageId: source.messageId },
+      { category: "study", factKey: "exam", factValue: "OWNER 准备高数考试", confidence: "high", sourceMessageId: source.messageId },
+    ], NOW + 3);
+    const rows = await env.DB.prepare("SELECT id, fact_key FROM memory_facts WHERE owner_id = ?").bind(owner).all<{ id: number; fact_key: string }>();
+    const fruit = rows.results.find((row) => row.fact_key === "fruit");
+    const exam = rows.results.find((row) => row.fact_key === "exam");
+    if (fruit === undefined || exam === undefined) throw new Error("memory_fixture_failed");
+    await setMemoryControl(env.DB, owner, "fact", fruit.id, "ignored", NOW + 4);
+    await setMemoryControl(env.DB, owner, "fact", exam.id, "pinned", NOW + 4);
+
+    const recalled = await getRelevantMemoryFacts(env.DB, owner, "今天聊点别的", 10, NOW + 5);
+    expect(recalled.some((item) => item.sourceId === fruit.id)).toBe(false);
+    expect(recalled).toEqual([expect.objectContaining({ sourceId: exam.id, sourceKind: "fact" })]);
+  });
 });
 
 describe("daily usage accounting", () => {
@@ -232,11 +246,13 @@ describe("daily usage accounting", () => {
     expect(await reserveDailyRequest(env.DB, owner, "2026-07-24", 2)).toBe(true);
     expect(await reserveDailyRequest(env.DB, owner, "2026-07-24", 2)).toBe(false);
 
-    await addDailyTokenUsage(env.DB, owner, "2026-07-24", 120, 30);
+    await addDailyTokenUsage(env.DB, owner, "2026-07-24", 120, 30, 80, 40);
     expect(await getDailyUsage(env.DB, owner, "2026-07-24")).toEqual({
       requestCount: 2,
       inputTokens: 120,
       outputTokens: 30,
+      promptCacheHitTokens: 80,
+      promptCacheMissTokens: 40,
     });
   });
 });

@@ -158,7 +158,7 @@ describe("confirmed persona correction flow", () => {
       owner,
       text: CONFIRM_PERSONA_CORRECTION,
       now: NOW + 11,
-      recoveryBaseUrl: "https://persona.example",
+      recoveryBaseUrl: "https://yuan.example",
     });
     expect(first.messages.join("\n")).toContain("v2");
     expect(first.messages.join("\n")).toContain("安慰时先倾听");
@@ -167,7 +167,7 @@ describe("confirmed persona correction flow", () => {
       owner,
       text: CONFIRM_PERSONA_CORRECTION,
       now: NOW + 12,
-      recoveryBaseUrl: "https://persona.example",
+      recoveryBaseUrl: "https://yuan.example",
     });
     expect(duplicate.handled).toBe(true);
     expect((await getCurrentPersona(env.DB, owner.ownerId))?.version).toBe(2);
@@ -182,7 +182,7 @@ describe("confirmed persona correction flow", () => {
       owner,
       text: "/persona-add 她后来明确表达了一个新兴趣",
       now: NOW + 5,
-      recoveryBaseUrl: "https://persona.example",
+      recoveryBaseUrl: "https://yuan.example",
     });
     expect(addCommand).toMatchObject({
       enqueue: { mode: "persona_addition" },
@@ -241,7 +241,7 @@ describe("confirmed persona correction flow", () => {
           owner,
           text: CONFIRM_PERSONA_ADDITION,
           now: NOW + 11,
-          recoveryBaseUrl: "https://persona.example",
+          recoveryBaseUrl: "https://yuan.example",
         })
       ).messages.join("\n"),
     ).toContain("v2");

@@ -40,7 +40,7 @@ describe("reminder commands", () => {
       db: env.DB,
       owner: currentOwner,
       now: NOW,
-      recoveryBaseUrl: "https://persona.example",
+      recoveryBaseUrl: "https://yuan.example",
       reminderWorkflow: binding,
     };
     const created = await handleOwnerCommand({ ...base, text: "/remind 明晚八点提醒我复习" });

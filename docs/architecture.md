@@ -27,7 +27,7 @@ The state machine executes these idempotent or resumable steps:
 10. register the Telegram webhook with a random webhook secret;
 11. verify the Worker health endpoint.
 
-After each successful step, `deployment-state.json` stores only the project name, output directory, model choice, thinking choice, completed steps, Cloudflare resource references, Worker URL, and timestamp. Telegram tokens, DeepSeek keys, migration keys, webhook secrets, persona text, and chat data are never written to that state file. Resume requires all three user secrets to be entered again.
+After each successful step, `deployment-state.json` stores only the project name, output directory, model choice, completed steps, Cloudflare resource references, Worker URL, and timestamp. Telegram tokens, DeepSeek keys, migration keys, webhook secrets, persona text, and chat data are never written to that state file. Resume requires all three user secrets to be entered again.
 
 ## Generated project
 

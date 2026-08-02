@@ -5,6 +5,8 @@ import {
   calculateBusyDurationSeconds,
   calculateInitialDelaySeconds,
   classifyMessageFlow,
+  proactiveOutputTokenBudget,
+  replyOutputTokenBudget,
   shouldEnterBusy,
   splitSemanticBubbles,
   type RandomSource,
@@ -15,6 +17,15 @@ function source(value: number): RandomSource {
 }
 
 describe("natural reply timing", () => {
+  it("uses a small normal budget and expands only for serious flows", () => {
+    expect(replyOutputTokenBudget(100, "normal")).toBe(100);
+    expect(replyOutputTokenBudget(100, "comfort")).toBe(180);
+    expect(replyOutputTokenBudget(100, "conflict")).toBe(180);
+    expect(replyOutputTokenBudget(100, "safety")).toBe(220);
+    expect(proactiveOutputTokenBudget(100)).toBe(70);
+    expect(proactiveOutputTokenBudget(50)).toBe(50);
+  });
+
   it("uses immediate safety, 20-60 second comfort, and 6-20 second normal delays", () => {
     expect(classifyMessageFlow("我想自杀")).toBe("safety");
     expect(calculateInitialDelaySeconds("safety", source(123))).toBe(0);
@@ -30,16 +41,26 @@ describe("natural reply timing", () => {
     expect(calculateBubbleGapSeconds(source(0xffff_ffff))).toBe(4);
   });
 
-  it("splits ordinary prose deterministically into two to five semantic bubbles", () => {
+  it("keeps ordinary replies to at most three semantic bubbles", () => {
     const text =
       "第一句先听你说。第二句认真回应你。第三句再说一个角度。第四句给一个结论。第五句一起加油。第六句收尾。";
-    const first = splitSemanticBubbles(text);
-    const second = splitSemanticBubbles(text);
+    const first = splitSemanticBubbles(text, "normal");
+    const second = splitSemanticBubbles(text, "normal");
 
     expect(first).toEqual(second);
     expect(first.length).toBeGreaterThanOrEqual(2);
-    expect(first.length).toBeLessThanOrEqual(5);
+    expect(first.length).toBeLessThanOrEqual(3);
     expect(first.join("")).toBe(text);
+  });
+
+  it("allows serious replies up to four semantic bubbles", () => {
+    const text =
+      "先听你说。这个感受很正常。换个角度看看。你已经做得很好。再慢慢处理。最后一起加油。";
+
+    const bubbles = splitSemanticBubbles(text, "comfort");
+
+    expect(bubbles.length).toBeLessThanOrEqual(4);
+    expect(bubbles.join("")).toBe(text);
   });
 
   it("preserves paragraph breaks without creating blank Telegram bubbles", () => {

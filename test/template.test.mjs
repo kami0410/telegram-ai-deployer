@@ -57,7 +57,7 @@ test("copies a template installed below an ancestor named dist", async () => {
   assert.equal(await readFile(path.join(output, "package.json"), "utf8"), "{\"name\":\"safe-template\"}");
 });
 
-test("renders selected model and thinking mode without secrets", () => {
+test("renders selected model without secrets", () => {
   const config = renderWranglerConfig({
     names: {
       worker: "example-bot",
@@ -70,9 +70,8 @@ test("renders selected model and thinking mode without secrets", () => {
     databaseId: "00000000-0000-0000-0000-000000000000",
     workerUrl: "https://example.invalid",
     model: "deepseek-v4-flash",
-    thinking: "disabled",
   });
   assert.match(config, /"DEEPSEEK_MODEL": "deepseek-v4-flash"/u);
-  assert.match(config, /"DEEPSEEK_THINKING_MODE": "disabled"/u);
+  assert.doesNotMatch(config, /DEEPSEEK_THINKING_MODE/u);
   assert.doesNotMatch(config, /TELEGRAM_BOT_TOKEN|DEEPSEEK_API_KEY/u);
 });

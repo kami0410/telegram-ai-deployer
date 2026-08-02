@@ -32,7 +32,6 @@ function values() {
     outputDir: document.querySelector("#outputDir").value.trim(),
     personaPath,
     model: document.querySelector('input[name="model"]:checked').value,
-    thinking: document.querySelector("#thinking").checked,
     acceptedDisclaimer: document.querySelector("#acceptDisclaimer").checked,
   };
 }
@@ -42,7 +41,6 @@ function renderSummary() {
   const rows = [
     ["项目", value.projectName || "—"], ["目录", value.outputDir || "—"],
     ["人格", personaPath || "通用人格"], ["模型", value.model],
-    ["思考模式", value.thinking ? "启用" : "关闭"],
   ];
   const summary = document.querySelector("#summary");
   summary.replaceChildren(...rows.flatMap(([term, description]) => {

@@ -2,12 +2,16 @@ export interface DailyUsage {
   requestCount: number;
   inputTokens: number;
   outputTokens: number;
+  promptCacheHitTokens: number;
+  promptCacheMissTokens: number;
 }
 
 interface UsageRow {
   request_count: number;
   input_tokens: number;
   output_tokens: number;
+  prompt_cache_hit_tokens: number;
+  prompt_cache_miss_tokens: number;
 }
 
 export async function reserveDailyRequest(
@@ -22,12 +26,14 @@ export async function reserveDailyRequest(
   const row = await db
     .prepare(
       `INSERT INTO usage_daily (
-         owner_id, usage_date, request_count, input_tokens, output_tokens
-       ) VALUES (?, ?, 1, 0, 0)
+         owner_id, usage_date, request_count, input_tokens, output_tokens,
+         prompt_cache_hit_tokens, prompt_cache_miss_tokens
+       ) VALUES (?, ?, 1, 0, 0, 0, 0)
        ON CONFLICT(owner_id, usage_date) DO UPDATE SET
          request_count = request_count + 1
        WHERE request_count < ?
-       RETURNING request_count, input_tokens, output_tokens`,
+       RETURNING request_count, input_tokens, output_tokens,
+                 prompt_cache_hit_tokens, prompt_cache_miss_tokens`,
     )
     .bind(ownerId, usageDate, maximumRequests)
     .first<UsageRow>();
@@ -40,12 +46,18 @@ export async function addDailyTokenUsage(
   usageDate: string,
   inputTokens: number,
   outputTokens: number,
+  promptCacheHitTokens = 0,
+  promptCacheMissTokens = 0,
 ): Promise<void> {
   if (
     !Number.isSafeInteger(inputTokens) ||
     inputTokens < 0 ||
     !Number.isSafeInteger(outputTokens) ||
-    outputTokens < 0
+    outputTokens < 0 ||
+    !Number.isSafeInteger(promptCacheHitTokens) ||
+    promptCacheHitTokens < 0 ||
+    !Number.isSafeInteger(promptCacheMissTokens) ||
+    promptCacheMissTokens < 0
   ) {
     throw new Error("daily_token_usage_invalid");
   }
@@ -53,10 +65,19 @@ export async function addDailyTokenUsage(
     .prepare(
       `UPDATE usage_daily
        SET input_tokens = input_tokens + ?,
-           output_tokens = output_tokens + ?
+           output_tokens = output_tokens + ?,
+           prompt_cache_hit_tokens = prompt_cache_hit_tokens + ?,
+           prompt_cache_miss_tokens = prompt_cache_miss_tokens + ?
        WHERE owner_id = ? AND usage_date = ?`,
     )
-    .bind(inputTokens, outputTokens, ownerId, usageDate)
+    .bind(
+      inputTokens,
+      outputTokens,
+      promptCacheHitTokens,
+      promptCacheMissTokens,
+      ownerId,
+      usageDate,
+    )
     .run();
   if (result.meta.changes !== 1) throw new Error("daily_usage_not_reserved");
 }
@@ -68,17 +89,26 @@ export async function getDailyUsage(
 ): Promise<DailyUsage> {
   const row = await db
     .prepare(
-      `SELECT request_count, input_tokens, output_tokens
+      `SELECT request_count, input_tokens, output_tokens,
+              prompt_cache_hit_tokens, prompt_cache_miss_tokens
        FROM usage_daily
        WHERE owner_id = ? AND usage_date = ?`,
     )
     .bind(ownerId, usageDate)
     .first<UsageRow>();
   return row === null
-    ? { requestCount: 0, inputTokens: 0, outputTokens: 0 }
+    ? {
+        requestCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        promptCacheHitTokens: 0,
+        promptCacheMissTokens: 0,
+      }
     : {
         requestCount: row.request_count,
         inputTokens: row.input_tokens,
         outputTokens: row.output_tokens,
+        promptCacheHitTokens: row.prompt_cache_hit_tokens,
+        promptCacheMissTokens: row.prompt_cache_miss_tokens,
       };
 }

@@ -5,6 +5,13 @@ import {
   getChatPreferences,
   isProactiveAllowedNow,
 } from "./storage/chat-preferences-repository";
+import { getEligibleOpenThreadFollowUp } from "./storage/relationship-repository";
+import { evaluateProactivePolicy } from "./proactive-policy";
+import {
+  isRecentProactiveTopic,
+  markExpiredProactiveIgnored,
+  recordProactiveDecision,
+} from "./storage/proactive-decision-repository";
 
 const WEEK_SECONDS = 7 * 86_400;
 const DAY_SECONDS = 86_400;
@@ -270,7 +277,9 @@ export async function handleScheduled(
   }
   await scheduleOverdueMemoryUpdates(env, dependencies, owner.id);
   const preferences = await getChatPreferences(env.DB, owner.id);
-  if (!(await isProactiveAllowedNow(env.DB, owner.id, now))) return;
+  await markExpiredProactiveIgnored(env.DB, owner.id, now);
+  const allowedNow = await isProactiveAllowedNow(env.DB, owner.id, now);
+  if (!allowedNow) return;
 
   const dayStart = beijingDayStartEpoch(now);
   const dayEnd = dayStart + DAY_SECONDS;
@@ -337,15 +346,38 @@ export async function handleScheduled(
     )
     .bind(owner.id)
     .first<{ count: number }>();
-  if ((pending?.count ?? 0) > 0) {
-    const delayed = Math.min(dayEnd - 1, now + 3_600);
-    await env.DB
-      .prepare(
-        `UPDATE persona_runtime_state
-         SET next_proactive_at = ?, updated_at = ? WHERE owner_id = ?`,
-      )
-      .bind(delayed, now, owner.id)
-      .run();
+  const openThread = await getEligibleOpenThreadFollowUp(env.DB, owner.id, now);
+  const topicKey = openThread === null
+    ? `safe_share:${schedule.weekly_sent % SAFE_POLICY_TOPIC_COUNT}`
+    : `open_thread:${openThread.id}`;
+  const duplicateTopic = await isRecentProactiveTopic(
+    env.DB, owner.id, topicKey, now - 24 * 3_600,
+  );
+  const policy = evaluateProactivePolicy({
+    now,
+    allowedNow,
+    hasPendingReply: (pending?.count ?? 0) > 0,
+    consecutiveUnanswered: preferences.consecutiveUnanswered,
+    lastProactiveAt: schedule.last_proactive_at,
+    meaningfulCandidate: true,
+    duplicateTopic,
+    noveltyScore: openThread === null ? 600 : 900,
+  });
+  await recordProactiveDecision(env.DB, {
+    ownerId: owner.id,
+    decision: policy.decision,
+    reasonCode: policy.reasonCode,
+    topicKey,
+    ...(openThread === null ? {} : { sourceEntityKind: "relationship_state", sourceEntityId: openThread.id }),
+    noveltyScore: policy.noveltyScore,
+    unansweredCount: preferences.consecutiveUnanswered,
+    scheduledAt: now,
+    now,
+  });
+  if (policy.decision !== "send") {
+    await env.DB.prepare(
+      "UPDATE persona_runtime_state SET next_proactive_at = ?, updated_at = ? WHERE owner_id = ?",
+    ).bind(Math.min(dayEnd - 1, policy.nextCheckAt ?? now + 6 * 3_600), now, owner.id).run();
     return;
   }
 
@@ -397,6 +429,8 @@ export async function handleScheduled(
     throw error;
   }
 }
+
+const SAFE_POLICY_TOPIC_COUNT = 4;
 
 export async function recoverStaleReminderDeliveries(
   env: Env,

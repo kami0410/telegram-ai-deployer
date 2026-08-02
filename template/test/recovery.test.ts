@@ -372,7 +372,7 @@ describe("recovery HTTP surface", () => {
 
     const page = await handleRecoveryHttp(
       new Request(
-        `https://persona.example/recover?challenge=${challenge.challengeId}`,
+        `https://yuan.example/recover?challenge=${challenge.challengeId}`,
       ),
       env.DB,
       NOW + 3,
@@ -382,7 +382,7 @@ describe("recovery HTTP surface", () => {
     expect(await page.text()).toContain("/api/recovery/complete");
 
     const badRequests = [
-      new Request("https://persona.example/api/recovery/complete", {
+      new Request("https://yuan.example/api/recovery/complete", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -391,7 +391,7 @@ describe("recovery HTTP surface", () => {
           newKeyHash: "0".repeat(64),
         }),
       }),
-      new Request("https://persona.example/api/recovery/complete", {
+      new Request("https://yuan.example/api/recovery/complete", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -418,7 +418,7 @@ describe("recovery HTTP surface", () => {
 
   it("rejects JSON request bodies larger than 4 KiB", async () => {
     const response = await handleRecoveryHttp(
-      new Request("https://persona.example/api/recovery/complete", {
+      new Request("https://yuan.example/api/recovery/complete", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ padding: "x".repeat(4_097) }),

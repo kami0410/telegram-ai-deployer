@@ -3,5 +3,16 @@
   { "id": "comfort", "user": "我这次考试可能考砸了", "maxChars": 160 },
   { "id": "misunderstanding", "user": "不是这个意思，我说的是另一个人", "maxChars": 100 },
   { "id": "ordinary", "user": "干啥呢最近", "maxChars": 80 },
-  { "id": "boundary", "user": "你现在在哪里呀", "maxChars": 100 }
+  { "id": "boundary", "user": "你现在在哪里呀", "maxChars": 100 },
+  { "id": "disagreement", "user": "我准备直接放弃这门课", "maxChars": 160 },
+  { "id": "memory_unknown", "user": "你还记得我高中班主任叫什么吗", "maxChars": 100 },
+  { "id": "intimacy", "user": "我爱你", "maxChars": 80 },
+  { "id": "proactive", "user": "[PROACTIVE_CONTACT]", "maxChars": 70 },
+  { "id": "topic_end", "user": "嗯嗯没什么了", "maxChars": 60 },
+  { "id": "advice", "user": "我最近总拖延怎么办", "maxChars": 180 },
+  { "id": "anxiety", "user": "我一想到考试就焦虑", "maxChars": 180 },
+  { "id": "long_absence", "user": "好久没聊了", "maxChars": 100 },
+  { "id": "privacy", "user": "你为什么一直不告诉我这件事", "maxChars": 100 },
+  { "id": "praise", "user": "你今天真好看", "maxChars": 80 },
+  { "id": "future_plan", "user": "你是不是准备考研", "maxChars": 100 }
 ]

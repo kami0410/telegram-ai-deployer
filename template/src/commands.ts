@@ -215,6 +215,36 @@ async function forgetCurrentConversation(
       .bind(ownerId, current.id),
     db.prepare("DELETE FROM interaction_reflections WHERE owner_id = ? AND conversation_id = ?")
       .bind(ownerId, current.id),
+    db.prepare("DELETE FROM memory_recall_traces WHERE owner_id = ? AND conversation_id = ?")
+      .bind(ownerId, current.id),
+    db.prepare(
+      `DELETE FROM identity_candidates
+       WHERE owner_id = ? AND status IN ('candidate','ready')
+         AND EXISTS (
+           SELECT 1 FROM identity_evidence JOIN messages ON messages.id = identity_evidence.source_message_id
+           WHERE identity_evidence.candidate_id = identity_candidates.id AND messages.conversation_id = ?
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM identity_evidence JOIN messages ON messages.id = identity_evidence.source_message_id
+           WHERE identity_evidence.candidate_id = identity_candidates.id AND messages.conversation_id <> ?
+         )`,
+    ).bind(ownerId, current.id, current.id),
+    db.prepare(
+      `DELETE FROM memory_graph_nodes
+       WHERE owner_id = ?
+         AND EXISTS (
+           SELECT 1 FROM memory_graph_sources
+           JOIN messages ON messages.id = memory_graph_sources.source_message_id
+           WHERE memory_graph_sources.node_id = memory_graph_nodes.id
+             AND messages.conversation_id = ?
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM memory_graph_sources
+           JOIN messages ON messages.id = memory_graph_sources.source_message_id
+           WHERE memory_graph_sources.node_id = memory_graph_nodes.id
+             AND messages.conversation_id <> ?
+         )`,
+    ).bind(ownerId, current.id, current.id),
     db
       .prepare("DELETE FROM conversations WHERE id = ? AND owner_id = ?")
       .bind(current.id, ownerId),
@@ -224,7 +254,7 @@ async function forgetCurrentConversation(
   ]);
   if (
     !results.every((result) => result.success) ||
-    (results[4]?.meta.changes ?? 0) < 1
+    (results[7]?.meta.changes ?? 0) < 1
   ) {
     throw new Error("forget_current_failed");
   }
@@ -260,6 +290,14 @@ async function forgetAllChatData(
     "DELETE FROM reply_feedback WHERE owner_id = ?",
     "DELETE FROM interaction_preference_drafts WHERE owner_id = ?",
     "DELETE FROM interaction_preferences WHERE owner_id = ?",
+    "DELETE FROM memory_recall_traces WHERE owner_id = ?",
+    "DELETE FROM identity_core_history WHERE owner_id = ?",
+    "DELETE FROM identity_evidence WHERE owner_id = ?",
+    "DELETE FROM identity_candidates WHERE owner_id = ?",
+    "DELETE FROM identity_core_entries WHERE owner_id = ?",
+    "DELETE FROM proactive_decisions WHERE owner_id = ?",
+    "DELETE FROM quality_events WHERE owner_id = ?",
+    "DELETE FROM memory_graph_nodes WHERE owner_id = ?",
     "DELETE FROM conversations WHERE owner_id = ?",
   ].map((sql) => db.prepare(sql).bind(ownerId));
   const results = await db.batch(statements);
@@ -305,8 +343,8 @@ async function handleConfirmation(
       handled: true,
       messages: [
         deleted
-          ? "Persona Bot 人格及其版本已删除，聊天数据仍保留。"
-          : "Persona Bot 人格已不存在，聊天数据仍保留。",
+          ? "Persona 人格及其版本已删除，聊天数据仍保留。"
+          : "Persona 人格已不存在，聊天数据仍保留。",
       ],
     };
   }
@@ -457,7 +495,7 @@ export async function handleOwnerCommand(
       return {
         handled: true,
         messages: [
-          `今日请求 ${usage.requestCount} 次，输入 ${usage.inputTokens} tokens，输出 ${usage.outputTokens} tokens。`,
+          `今日请求 ${usage.requestCount} 次，输入 ${usage.inputTokens} tokens，输出 ${usage.outputTokens} tokens；缓存命中 ${usage.promptCacheHitTokens}，未命中 ${usage.promptCacheMissTokens}。`,
         ],
       };
     }

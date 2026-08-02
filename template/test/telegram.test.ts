@@ -9,7 +9,7 @@ const completeMessage = {
   ok: true,
   result: {
     message_id: 321,
-    from: { id: 999, is_bot: true, first_name: "Persona Bot" },
+    from: { id: 999, is_bot: true, first_name: "Persona" },
     chat: { id: 101, type: "private" },
     date: 1_700_000_000,
     text: "嗯嗯嗯",
@@ -36,7 +36,7 @@ describe("Telegram API client", () => {
       replyMarkup: {
         inline_keyboard: [[
           { text: "确认新增", callback_data: "pd:c:opaque-id" },
-          { text: "修改", web_app: { url: "https://persona.example/app#draft=opaque-id" } },
+          { text: "修改", web_app: { url: "https://yuan.example/app#draft=opaque-id" } },
         ]],
       },
     });
@@ -104,15 +104,15 @@ describe("Telegram API client", () => {
     });
     const client = createTelegramClient("123456:test-token", fetcher);
     await client.configureManagement({
-      webhookUrl: "https://persona.example/telegram/webhook",
+      webhookUrl: "https://yuan.example/telegram/webhook",
       webhookSecret: "secret",
-      appUrl: "https://persona.example/app",
+      appUrl: "https://yuan.example/app",
     });
     expect(methods).toEqual(["setWebhook", "setChatMenuButton"]);
     const webhookBody = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
     expect(webhookBody.allowed_updates).toEqual(["message", "callback_query"]);
     const menuBody = JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body));
-    expect(menuBody.menu_button.web_app.url).toBe("https://persona.example/app");
+    expect(menuBody.menu_button.web_app.url).toBe("https://yuan.example/app");
   });
 
   it("classifies Telegram rate limits without leaking response text", async () => {

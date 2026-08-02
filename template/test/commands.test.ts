@@ -13,6 +13,7 @@ import {
   getOrCreateActiveConversation,
 } from "../src/storage/chat-repository";
 import { upsertMemoryFacts } from "../src/storage/memory-repository";
+import { upsertMemoryGraph } from "../src/storage/memory-graph-repository";
 import { pairOwner } from "../src/storage/owner-repository";
 import { seedPersona } from "../src/storage/persona-repository";
 import { queueMemoryVectorJob } from "../src/storage/semantic-memory-repository";
@@ -83,6 +84,18 @@ async function fixture(): Promise<{
     ],
     NOW + 4,
   );
+  await upsertMemoryGraph(env.DB, {
+    ownerId: owner.ownerId,
+    nodes: [{
+      type: "goal",
+      key: "current_exam",
+      value: "准备考试",
+      confidence: "high",
+      sourceMessageId: message.messageId,
+    }],
+    edges: [],
+    now: NOW + 4,
+  });
   return {
     owner,
     conversationId: conversation.conversationId,
@@ -96,7 +109,7 @@ function command(owner: OwnerRecord, text: string) {
     owner,
     text,
     now: NOW + 10,
-    recoveryBaseUrl: "https://persona.example",
+    recoveryBaseUrl: "https://yuan.example",
   });
 }
 
@@ -104,7 +117,7 @@ beforeEach(clearAll);
 
 describe("command parsing", () => {
   it("is case-insensitive and strips an optional bot username", () => {
-    expect(parseCommand("/UsAgE@PersonalBot extra")).toEqual({
+    expect(parseCommand("/UsAgE@PersonaBot extra")).toEqual({
       name: "usage",
       argument: "extra",
     });
@@ -113,9 +126,23 @@ describe("command parsing", () => {
 });
 
 describe("owner utility commands", () => {
+  it("returns an adjustment target for the latest Persona reply", async () => {
+    const { owner, conversationId } = await fixture();
+    const assistant = await appendMessage(env.DB, {
+      ownerId: owner.ownerId,
+      conversationId,
+      role: "assistant",
+      mode: "persona",
+      content: "嗯嗯嗯你先说",
+      createdAt: NOW + 9,
+    });
+    const result = await command(owner, "/adjust");
+    expect(result.adjustAssistantMessageId).toBe(assistant.messageId);
+    expect(result.messages).toEqual(["调整最近一次 Persona 回复："]);
+  });
   it("returns one categorized help message without queue work", async () => {
     const { owner } = await fixture();
-    const result = await command(owner, "/help@PersonalBot");
+    const result = await command(owner, "/help@PersonaBot");
     expect(result.handled).toBe(true);
     expect(result.enqueue).toBeUndefined();
     expect(result.messages).toHaveLength(1);
@@ -147,7 +174,7 @@ describe("owner utility commands", () => {
   it("supports new topic, memory, usage, ask, and recovery-key setup", async () => {
     const { owner, conversationId } = await fixture();
     await reserveDailyRequest(env.DB, owner.ownerId, "2025-06-15", 200);
-    await addDailyTokenUsage(env.DB, owner.ownerId, "2025-06-15", 120, 30);
+    await addDailyTokenUsage(env.DB, owner.ownerId, "2025-06-15", 120, 30, 80, 40);
 
     const memory = await command(owner, "/memory");
     expect(memory.handled).toBe(true);
@@ -156,6 +183,7 @@ describe("owner utility commands", () => {
     const usage = await command(owner, "/usage");
     expect(usage.messages.join("\n")).toContain("120");
     expect(usage.messages.join("\n")).toContain("30");
+    expect(usage.messages.join("\n")).toContain("缓存命中 80");
 
     const ask = await command(owner, "/ask 解释麦克斯韦方程组");
     expect(ask).toMatchObject({
@@ -165,7 +193,7 @@ describe("owner utility commands", () => {
 
     const recovery = await command(owner, "/recovery-key");
     expect(recovery.messages.join("\n")).toContain(
-      "https://persona.example/recover?challenge=",
+      "https://yuan.example/recover?challenge=",
     );
 
     const next = await command(owner, "/new");
@@ -213,6 +241,10 @@ describe("privacy deletion confirmations", () => {
     expect(
       await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_facts").first(),
     ).toEqual({ count: 0 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_graph_nodes").first())
+      .toEqual({ count: 0 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_recall_traces").first())
+      .toEqual({ count: 0 });
     expect(
       await env.DB.prepare("SELECT COUNT(*) AS count FROM owners").first(),
     ).toEqual({ count: 1 });
@@ -245,6 +277,8 @@ describe("privacy deletion confirmations", () => {
       "messages",
       "conversation_summaries",
       "memory_facts",
+      "memory_graph_nodes",
+      "memory_recall_traces",
       "deliveries",
       "processed_updates",
       "usage_daily",
@@ -267,14 +301,14 @@ describe("privacy deletion confirmations", () => {
     ).bind(fact.id).first()).toEqual({ operation: "delete" });
   });
 
-  it("deletes only Persona Bot persona after an exact distinct confirmation", async () => {
+  it("deletes only Persona persona after an exact distinct confirmation", async () => {
     const { owner } = await fixture();
     const requested = await command(owner, "/persona-delete");
     expect(requested.messages[0]).toContain(CONFIRM_PERSONA_DELETE);
     expect(requested.messages[0]).toContain("不会删除聊天");
 
     const confirmed = await command(owner, CONFIRM_PERSONA_DELETE);
-    expect(confirmed.messages).toEqual(["Persona Bot 人格及其版本已删除，聊天数据仍保留。"]);
+    expect(confirmed.messages).toEqual(["Persona 人格及其版本已删除，聊天数据仍保留。"]);
     expect(
       await env.DB.prepare("SELECT COUNT(*) AS count FROM persona_profiles").first(),
     ).toEqual({ count: 0 });

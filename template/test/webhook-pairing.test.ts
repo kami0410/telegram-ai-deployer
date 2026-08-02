@@ -61,7 +61,7 @@ function update(
 }
 
 function request(body: string, secret = SECRET): Request {
-  return new Request("https://persona.example/telegram/webhook", {
+  return new Request("https://yuan.example/telegram/webhook", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -121,7 +121,7 @@ describe("Telegram webhook boundary", () => {
     expect(deps.telegramCalls).toHaveLength(0);
 
     const wrongMethod = await handleWebhook(
-      new Request("https://persona.example/telegram/webhook", {
+      new Request("https://yuan.example/telegram/webhook", {
         method: "GET",
         headers: { "x-telegram-bot-api-secret-token": SECRET },
       }),
@@ -131,7 +131,7 @@ describe("Telegram webhook boundary", () => {
     expect(wrongMethod.status).toBe(405);
 
     const wrongPath = await handleWebhook(
-      new Request("https://persona.example/not-webhook", {
+      new Request("https://yuan.example/not-webhook", {
         method: "POST",
         headers: { "x-telegram-bot-api-secret-token": SECRET },
         body: "{}",
@@ -196,7 +196,7 @@ describe("single-owner pairing and recovery", () => {
     const sendCalls = deps.telegramCalls.filter((call) => call.method === "sendMessage");
     expect(sendCalls[0]?.body.text).toBe("干啥呢最近");
     expect(sendCalls[1]?.body.text).toContain(
-      "https://persona.example/recover?challenge=",
+      "https://yuan.example/recover?challenge=",
     );
     expect(deps.telegramCalls.some((call) => call.method === "deleteMessage")).toBe(true);
     expect(
@@ -273,7 +273,7 @@ describe("single-owner pairing and recovery", () => {
     );
     expect(
       recovery.telegramCalls.find((call) => call.method === "sendMessage")?.body.text,
-    ).toContain("https://persona.example/recover?challenge=");
+    ).toContain("https://yuan.example/recover?challenge=");
 
     const plaintext = dependencies();
     await handleWebhook(

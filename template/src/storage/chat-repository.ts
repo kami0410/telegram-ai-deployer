@@ -320,8 +320,6 @@ export async function countUnsummarizedPersonaMessages(
   return row?.count ?? 0;
 }
 
-export const countUnsummarizedMessages = countUnsummarizedPersonaMessages;
-
 export async function closeActiveConversation(
   db: D1Database,
   ownerId: number,

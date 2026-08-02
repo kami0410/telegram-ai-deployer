@@ -56,7 +56,7 @@ function update(
 }
 
 function webhookRequest(payload: unknown): Request {
-  return new Request("https://persona.example/telegram/webhook", {
+  return new Request("https://yuan.example/telegram/webhook", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -190,7 +190,7 @@ it("runs pairing, one durable reply, duplicate suppression, and account recovery
   expect(newHash).not.toBeNull();
   if (newHash === null) return;
   const recovered = await handleRecoveryHttp(
-    new Request("https://persona.example/api/recovery/complete", {
+    new Request("https://yuan.example/api/recovery/complete", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ challengeId: challenge, oldKey, newKeyHash: newHash }),

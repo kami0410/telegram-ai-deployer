@@ -41,12 +41,11 @@
       </section>
 
       <section data-step="3" hidden>
-        <div class="section-heading"><span>03</span><div><h2>机器人配置</h2><p>Flash 成本更低；Pro 更适合复杂推理。思考模式会增加延迟和消耗。</p></div></div>
+        <div class="section-heading"><span>03</span><div><h2>机器人配置</h2><p>Flash 成本更低；Pro 更适合复杂推理。`/ask` 始终启用思考模式。</p></div></div>
         <fieldset><legend>DeepSeek 模型</legend>
           <label class="choice"><input type="radio" name="model" value="deepseek-v4-flash" checked><span><strong>V4 Flash</strong><small>默认 · 更快更省</small></span></label>
           <label class="choice"><input type="radio" name="model" value="deepseek-v4-pro"><span><strong>V4 Pro</strong><small>复杂任务质量优先</small></span></label>
         </fieldset>
-        <label class="toggle"><input id="thinking" type="checkbox"><span>启用思考模式</span></label>
         <div class="grid two">
           <label>项目名称<input id="projectName" required value="my-telegram-bot" autocomplete="off" pattern="[a-z][a-z0-9-]{1,39}"></label>
           <label>新建/空的项目目录<input id="outputDir" required placeholder="C:\Bots\my-telegram-bot" autocomplete="off"></label>

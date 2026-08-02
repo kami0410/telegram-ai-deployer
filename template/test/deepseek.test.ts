@@ -59,7 +59,13 @@ describe("DeepSeek chat client", () => {
       });
       return jsonResponse({
         choices: [{ message: { role: "assistant", content: "嗯嗯嗯" } }],
-        usage: { prompt_tokens: 120, completion_tokens: 8, total_tokens: 128 },
+        usage: {
+          prompt_tokens: 120,
+          completion_tokens: 8,
+          total_tokens: 128,
+          prompt_cache_hit_tokens: 80,
+          prompt_cache_miss_tokens: 40,
+        },
       });
     });
 
@@ -70,7 +76,13 @@ describe("DeepSeek chat client", () => {
       ]),
     ).resolves.toEqual({
       content: "嗯嗯嗯",
-      usage: { inputTokens: 120, outputTokens: 8, totalTokens: 128 },
+      usage: {
+        inputTokens: 120,
+        outputTokens: 8,
+        totalTokens: 128,
+        promptCacheHitTokens: 80,
+        promptCacheMissTokens: 40,
+      },
     });
     expect(fetcher).toHaveBeenCalledWith(
       "https://api.deepseek.com/chat/completions",
@@ -212,6 +224,228 @@ describe("DeepSeek memory extraction", () => {
     });
   });
 
+  it("accepts a JSON response wrapped in a markdown code fence", async () => {
+    const memory = {
+      summary: "已提炼的摘要",
+      through_message_id: 12,
+      stable_facts: [],
+      episodes: [],
+    };
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        choices: [{ message: { content: `\`\`\`json\n${JSON.stringify(memory)}\n\`\`\`` } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
+
+    await expect(
+      requestMemoryUpdate(options(fetcher), {
+        previousSummary: null,
+        sourceMessages: [{ id: 12, role: "user", content: "source" }],
+      }),
+    ).resolves.toMatchObject({ summary: "已提炼的摘要", throughMessageId: 12 });
+  });
+
+  it("extracts only relationship state grounded in a user message", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        choices: [{ message: { content: JSON.stringify({
+          summary: "约定考后继续聊",
+          stable_facts: [],
+          episodes: [],
+          relationship_states: [
+            {
+              kind: "open_thread",
+              value: "等待 OWNER 考完分享结果",
+              source_message_id: 12,
+              evidence: "考完再跟你说结果",
+            },
+            {
+              kind: "shared_moment",
+              value: "Persona 今天陪 OWNER 去了图书馆",
+              source_message_id: 11,
+              evidence: "陪你去了图书馆",
+            },
+          ],
+        }) } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
+
+    await expect(requestMemoryUpdate(options(fetcher), {
+      previousSummary: null,
+      sourceMessages: [
+        { id: 11, role: "assistant", content: "我今天陪你去了图书馆" },
+        { id: 12, role: "user", content: "我明天考完再跟你说结果" },
+      ],
+    })).resolves.toMatchObject({
+      relationshipStates: [{
+        kind: "open_thread",
+        value: "等待 OWNER 考完分享结果",
+        sourceMessageId: 12,
+      }],
+    });
+  });
+
+  it("extracts graph items only from owned user evidence", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        choices: [{ message: { content: JSON.stringify({
+          summary: "用户调整了学习计划",
+          stable_facts: [],
+          episodes: [],
+          relationship_states: [],
+          graph_nodes: [
+            {
+              type: "goal",
+              key: "study_plan",
+              value: "准备研究生考试",
+              confidence: "high",
+              source_message_id: 12,
+            },
+            {
+              type: "place",
+              key: "persona_location",
+              value: "图书馆",
+              confidence: "high",
+              source_message_id: 11,
+            },
+          ],
+          graph_edges: [{
+            from_type: "person",
+            from_key: "kami",
+            to_type: "goal",
+            to_key: "study_plan",
+            relation: "related_to",
+            confidence: "high",
+            source_message_id: 12,
+          }],
+          time_layers: {},
+        }) } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
+
+    await expect(requestMemoryUpdate(options(fetcher), {
+      previousSummary: null,
+      sourceMessages: [
+        { id: 11, role: "assistant", content: "我刚才去了图书馆" },
+        { id: 12, role: "user", content: "我的计划改成准备研究生考试" },
+      ],
+    })).resolves.toMatchObject({
+      graphNodes: [{
+        type: "goal",
+        key: "study_plan",
+        value: "准备研究生考试",
+        confidence: "high",
+        sourceMessageId: 12,
+      }],
+      graphEdges: [{
+        fromType: "person",
+        fromKey: "kami",
+        toType: "goal",
+        toKey: "study_plan",
+        relation: "related_to",
+        confidence: "high",
+        sourceMessageId: 12,
+      }],
+    });
+  });
+
+  it("accepts memory JSON when the model adds prose or a thinking block", async () => {
+    const memory = {
+      summary: "已提炼的摘要",
+      through_message_id: 12,
+      stable_facts: [],
+      episodes: [],
+    };
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        choices: [{
+          message: {
+            content: `<think>先检查对话来源。</think>\n提取结果如下：\n\`\`\`json\n${JSON.stringify(memory)}\n\`\`\``,
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
+
+    await expect(
+      requestMemoryUpdate(options(fetcher), {
+        previousSummary: null,
+        sourceMessages: [{ id: 12, role: "user", content: "source" }],
+      }),
+    ).resolves.toMatchObject({ summary: "已提炼的摘要", throughMessageId: 12 });
+  });
+
+  it("normalizes nonstandard but valid memory JSON instead of rejecting the batch", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              summary: 42,
+              through_message_id: 999,
+              stable_facts: [{
+                category: "other",
+                fact_key: "考试计划",
+                fact_value: "正在准备考试",
+                confidence: "certain",
+                source_message_id: 999,
+              }],
+              episodes: "none",
+            }),
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
+
+    await expect(
+      requestMemoryUpdate(options(fetcher), {
+        previousSummary: null,
+        sourceMessages: [{ id: 12, role: "user", content: "source" }],
+      }),
+    ).resolves.toMatchObject({
+      summary: "42",
+      throughMessageId: 12,
+      stableFacts: [],
+      episodes: [],
+    });
+  });
+
+  it("recovers an invalid source id only when the fact is grounded in a user message", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        choices: [{ message: { content: JSON.stringify({
+          summary: "准备考试",
+          through_message_id: 12,
+          stable_facts: [{
+            category: "study",
+            fact_key: "exam_plan",
+            fact_value: "正在准备考试",
+            confidence: "high",
+            source_message_id: 999,
+            evidence: "正在准备考试",
+          }],
+          episodes: [],
+        }) } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
+
+    await expect(requestMemoryUpdate(options(fetcher), {
+      previousSummary: null,
+      sourceMessages: [
+        { id: 10, role: "user", content: "我最近正在准备考试" },
+        { id: 11, role: "assistant", content: "加油呀" },
+        { id: 12, role: "user", content: "还有点紧张" },
+      ],
+    })).resolves.toMatchObject({
+      stableFacts: [{ factKey: "exam_plan", sourceMessageId: 10 }],
+    });
+  });
+
   it.each([
     {
       summary: "x",
@@ -278,61 +512,6 @@ describe("DeepSeek memory extraction", () => {
         ],
       }),
     ).resolves.toMatchObject({ summary: "x", throughMessageId: 12 });
-  });
-
-  it("normalizes nonstandard valid memory JSON", async () => {
-    const fetcher = vi.fn<typeof fetch>(async () =>
-      jsonResponse({
-        choices: [{ message: { content: JSON.stringify({
-          summary: 42,
-          through_message_id: 999,
-          stable_facts: [{ category: "other", fact_key: "考试计划", fact_value: "正在准备考试", confidence: "certain", source_message_id: 999 }],
-          episodes: "none",
-        }) } }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      }),
-    );
-    await expect(requestMemoryUpdate(options(fetcher), {
-      previousSummary: null,
-      sourceMessages: [{ id: 12, role: "user", content: "source" }],
-    })).resolves.toMatchObject({
-      summary: "42",
-      throughMessageId: 12,
-      stableFacts: [],
-      episodes: [],
-    });
-  });
-
-  it("recovers an invalid source id only when the fact is grounded in a user message", async () => {
-    const fetcher = vi.fn<typeof fetch>(async () =>
-      jsonResponse({
-        choices: [{ message: { content: JSON.stringify({
-          summary: "准备考试",
-          through_message_id: 12,
-          stable_facts: [{
-            category: "study",
-            fact_key: "exam_plan",
-            fact_value: "正在准备考试",
-            confidence: "high",
-            source_message_id: 999,
-            evidence: "正在准备考试",
-          }],
-          episodes: [],
-        }) } }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      }),
-    );
-
-    await expect(requestMemoryUpdate(options(fetcher), {
-      previousSummary: null,
-      sourceMessages: [
-        { id: 10, role: "user", content: "我最近正在准备考试" },
-        { id: 11, role: "assistant", content: "加油呀" },
-        { id: 12, role: "user", content: "还有点紧张" },
-      ],
-    })).resolves.toMatchObject({
-      stableFacts: [{ factKey: "exam_plan", sourceMessageId: 10 }],
-    });
   });
 });
 
@@ -559,7 +738,13 @@ describe("DeepSeek persona draft generation", () => {
     ).resolves.toMatchObject({
       summary: "新增到 coreTraits.rules",
       impactScope: "coreTraits.rules",
-      usage: { inputTokens: 40, outputTokens: 20, totalTokens: 60 },
+      usage: {
+        inputTokens: 40,
+        outputTokens: 20,
+        totalTokens: 60,
+        promptCacheHitTokens: 0,
+        promptCacheMissTokens: 0,
+      },
     });
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(requestBodies[1])).toContain("上一份草稿未通过验证");

@@ -5,12 +5,11 @@
   "compatibility_date": "2026-07-24",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "DEEPSEEK_MODEL": "deepseek-v4-pro",
-    "DEEPSEEK_THINKING_MODE": "disabled",
+    "DEEPSEEK_MODEL": "deepseek-v4-flash",
     "MAX_OUTPUT_TOKENS": "100",
     "DAILY_MESSAGE_LIMIT": "200",
     "MEMORY_UPDATE_INTERVAL": "8",
-    "PUBLIC_BASE_URL": "https://persona.example"
+    "PUBLIC_BASE_URL": "https://yuan.example"
   },
   "d1_databases": [
     {

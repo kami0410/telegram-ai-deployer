@@ -168,8 +168,19 @@ function dependencies(options: {
 beforeEach(clearAll);
 
 describe("queue chat outbox", () => {
-  it("queues a memory update after sixteen unsummarized persona messages even when total count is odd", async () => {
-    const job = await chatJob(8998, "test message");
+  it("strips parenthesized scene narration before persisting a Persona reply", async () => {
+    const job = await chatJob();
+    const deps = dependencies({
+      deepSeekContent: "（窗外下起雨，她轻轻笑了笑）怎么了呀",
+    });
+    await processQueueMessage(job, env, deps.value);
+    expect(await env.DB.prepare(
+      "SELECT content FROM messages WHERE role = 'assistant' ORDER BY id DESC LIMIT 1",
+    ).first()).toEqual({ content: "怎么了呀" });
+  });
+
+  it("queues a memory update after sixteen unsummarized Persona messages even when total count is odd", async () => {
+    const job = await chatJob(8998, "今天想聊聊最近的计划");
     const source = await env.DB.prepare(
       "SELECT conversation_id FROM messages WHERE telegram_update_id = 8998",
     ).first<{ conversation_id: number }>();
@@ -180,7 +191,7 @@ describe("queue chat outbox", () => {
         conversationId: source.conversation_id,
         role: index % 2 === 0 ? "assistant" : "user",
         mode: "persona",
-        content: `historical message ${index}`,
+        content: `历史消息 ${index}`,
         createdAt: NOW + 4 + index,
       });
     }
@@ -199,29 +210,6 @@ describe("queue chat outbox", () => {
         "SELECT message_count FROM conversations WHERE id = ?",
       ).bind(source.conversation_id).first(),
     ).toEqual({ message_count: 323 });
-  });
-
-  it("records a non-retryable memory extraction failure without storing chat content", async () => {
-    const job = await chatJob(8997, "failure fixture");
-    const source = await env.DB.prepare(
-      "SELECT conversation_id FROM messages WHERE telegram_update_id = 8997",
-    ).first<{ conversation_id: number }>();
-    if (source === null) throw new Error("source_missing");
-    const deps = dependencies({ deepSeekStatus: 400 });
-
-    await expect(processQueueMessage({
-      type: "memory_update",
-      ownerId: job.ownerId,
-      conversationId: source.conversation_id,
-    }, env, deps.value)).resolves.toBeUndefined();
-
-    expect(await env.DB.prepare(
-      `SELECT error_code, failure_count FROM memory_update_failures
-       WHERE owner_id = ? AND conversation_id = ?`,
-    ).bind(job.ownerId, source.conversation_id).first()).toEqual({
-      error_code: "upstream_4xx",
-      failure_count: 1,
-    });
   });
 
   it("shows inline choices instead of overwriting a conflicting stable fact", async () => {
@@ -307,6 +295,29 @@ describe("queue chat outbox", () => {
     expect(memoryDeps.deepSeekBodies[0]?.max_tokens).toBe(1_200);
   });
 
+  it("records a non-retryable memory extraction failure without storing chat content", async () => {
+    const job = await chatJob(8997, "只用于验证失败记录的消息内容");
+    const source = await env.DB.prepare(
+      "SELECT conversation_id FROM messages WHERE telegram_update_id = 8997",
+    ).first<{ conversation_id: number }>();
+    if (source === null) throw new Error("source_missing");
+    const deps = dependencies({ deepSeekStatus: 400 });
+
+    await expect(processQueueMessage({
+      type: "memory_update",
+      ownerId: job.ownerId,
+      conversationId: source.conversation_id,
+    }, env, deps.value)).resolves.toBeUndefined();
+
+    expect(await env.DB.prepare(
+      `SELECT error_code, failure_count FROM memory_update_failures
+       WHERE owner_id = ? AND conversation_id = ?`,
+    ).bind(job.ownerId, source.conversation_id).first()).toEqual({
+      error_code: "upstream_4xx",
+      failure_count: 1,
+    });
+  });
+
   it("calls DeepSeek once, saves the answer first, and reuses it on redelivery", async () => {
     const job = await chatJob();
     const deps = dependencies();
@@ -346,6 +357,7 @@ describe("queue chat outbox", () => {
   it("queues only one bubble and schedules the next after the first is sent", async () => {
     const job = await chatJob();
     const deps = dependencies();
+    deps.value.random = { nextUint32: () => 0 };
 
     await processQueueMessage(job, env, deps.value);
     const initiallyQueued = deps.queued.filter(
@@ -362,8 +374,48 @@ describe("queue chat outbox", () => {
       (entry) => entry.job.type === "bubble",
     );
     expect(bubblesAfterSend).toHaveLength(2);
-    expect(bubblesAfterSend[1]?.delaySeconds).toBeGreaterThanOrEqual(2);
-    expect(bubblesAfterSend[1]?.delaySeconds).toBeLessThanOrEqual(4);
+    expect(bubblesAfterSend[1]?.delaySeconds).toBe(2);
+  });
+
+  it("persists grounded graph memory after the existing memory update succeeds", async () => {
+    const job = await chatJob(8996, "我的计划改成准备研究生考试");
+    const source = await env.DB.prepare(
+      "SELECT id, conversation_id FROM messages WHERE telegram_update_id = 8996",
+    ).first<{ id: number; conversation_id: number }>();
+    if (source === null) throw new Error("source_missing");
+    const deps = dependencies({
+      deepSeekContent: JSON.stringify({
+        summary: "用户调整了学习计划",
+        stable_facts: [],
+        episodes: [],
+        relationship_states: [],
+        graph_nodes: [{
+          type: "goal",
+          key: "study_plan",
+          value: "准备研究生考试",
+          confidence: "high",
+          source_message_id: source.id,
+        }],
+        graph_edges: [],
+        time_layers: {},
+      }),
+    });
+    await reserveDailyRequest(env.DB, job.ownerId, "2025-06-15", 200);
+
+    await processQueueMessage({
+      type: "memory_update",
+      ownerId: job.ownerId,
+      conversationId: source.conversation_id,
+    }, env, deps.value);
+
+    expect(await env.DB.prepare(
+      "SELECT node_type, canonical_key, value, status FROM memory_graph_nodes WHERE owner_id = ?",
+    ).bind(job.ownerId).first()).toEqual({
+      node_type: "goal",
+      canonical_key: "study_plan",
+      value: "准备研究生考试",
+      status: "active",
+    });
   });
 
   it("sends each persisted bubble once and completes the Update", async () => {
@@ -395,34 +447,6 @@ describe("queue chat outbox", () => {
         .prepare("SELECT status FROM processed_updates WHERE telegram_update_id = 9001")
         .first(),
     ).toEqual({ status: "completed" });
-  });
-
-  it("strips stage directions from assistant text before delivery", async () => {
-    const job = await chatJob(9003, "test message");
-    const deps = dependencies({
-      deepSeekContent: "（背景：海边）今天心情不错（微笑）*点头*。",
-    });
-    await processQueueMessage(job, env, deps.value);
-    const processed = new Set<number>();
-    while (true) {
-      const bubble = deps.queued
-        .map((entry) => entry.job)
-        .find(
-          (queuedJob): queuedJob is Extract<QueueJob, { type: "bubble" }> =>
-            queuedJob.type === "bubble" && !processed.has(queuedJob.deliveryId),
-        );
-      if (bubble === undefined) break;
-      processed.add(bubble.deliveryId);
-      await processQueueMessage(bubble, env, deps.value);
-    }
-    const sentTexts = deps.telegramBodies
-      .filter((body) => typeof body.text === "string")
-      .map((body) => String(body.text));
-    expect(sentTexts.length).toBeGreaterThan(0);
-    expect(sentTexts.every((text) => !text.includes("（") && !text.includes("*"))).toBe(
-      true,
-    );
-    expect(sentTexts[0]).toContain("今天心情不错");
   });
 
   it("refreshes typing and classifies Telegram 429 as retryable", async () => {
@@ -508,6 +532,47 @@ describe("queue chat outbox", () => {
         .bind(job.telegramUpdateId)
         .first(),
     ).toEqual({ status: "failed", last_error_code: "upstream_5xx" });
+  });
+
+  it("adds one adjustment entry only to the final bubble of an eligible reply", async () => {
+    const job = await chatJob(9010, "我最近考试压力好大想哭");
+    const deps = dependencies();
+    await processQueueMessage(job, env, deps.value);
+    const processed = new Set<number>();
+    while (true) {
+      const bubble = deps.queued.map((entry) => entry.job).find(
+        (queuedJob): queuedJob is Extract<QueueJob, { type: "bubble" }> =>
+          queuedJob.type === "bubble" && !processed.has(queuedJob.deliveryId),
+      );
+      if (bubble === undefined) break;
+      processed.add(bubble.deliveryId);
+      await processQueueMessage(bubble, env, deps.value);
+    }
+
+    const marked = deps.telegramBodies.filter((body) => body.reply_markup !== undefined);
+    expect(marked).toHaveLength(1);
+    expect(JSON.stringify(marked[0]?.reply_markup)).toContain("ra:o:");
+    expect(deps.telegramBodies.at(-1)).toEqual(marked[0]);
+  });
+
+  it("records the exact memory references placed in the reply prompt", async () => {
+    const job = await chatJob(9011, "今天随便聊聊");
+    const memory = await env.DB.prepare(
+      `INSERT INTO memory_facts (
+         owner_id, category, fact_key, fact_value, confidence, created_at, updated_at
+       ) VALUES (?, 'relationship', 'special_person', 'OWNER 和 Persona 是彼此特别的人', 'high', ?, ?)
+       RETURNING id`,
+    ).bind(job.ownerId, NOW, NOW).first<{ id: number }>();
+    if (memory === null) throw new Error("memory_fixture_failed");
+    const deps = dependencies();
+    await processQueueMessage(job, env, deps.value);
+    const context = await env.DB.prepare(
+      "SELECT memory_refs_json FROM reply_contexts WHERE owner_id = ?",
+    ).bind(job.ownerId).first<{ memory_refs_json: string }>();
+    expect(JSON.parse(context?.memory_refs_json ?? "[]")).toContainEqual({
+      kind: "fact",
+      id: memory.id,
+    });
   });
 
   it("delivers a short fallback instead of silently dropping repeated invalid model responses", async () => {

@@ -4,6 +4,8 @@ import { handleScheduled } from "./scheduled";
 import { handleWebhook } from "./webhook";
 import { handleAppApi } from "./app-api";
 import { renderAppPage, renderAppScript } from "./app-page";
+import { renderTelegramBotAvatar } from "./telegram-avatar";
+import { renderPublicPage } from "./public-page";
 export { ReminderWorkflow } from "./reminder-workflow";
 
 const HEALTH_RESPONSE = {
@@ -15,6 +17,10 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (request.method === "GET" && url.pathname === "/") {
+      return renderPublicPage();
+    }
+
     if (url.pathname.startsWith("/api/app/")) {
       return handleAppApi(request, env);
     }
@@ -25,6 +31,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/app.js") {
       return renderAppScript();
+    }
+
+    if (request.method === "GET" && url.pathname === "/app/avatar") {
+      return renderTelegramBotAvatar(env.TELEGRAM_BOT_TOKEN);
     }
 
     if (

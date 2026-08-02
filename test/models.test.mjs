@@ -5,28 +5,19 @@ import { MODELS, normalizeModelSelection } from "../lib/models.mjs";
 
 test("allows only current DeepSeek V4 models", () => {
   assert.deepEqual(MODELS.map(({ id }) => id), ["deepseek-v4-flash", "deepseek-v4-pro"]);
-  assert.deepEqual(normalizeModelSelection({ model: "deepseek-v4-flash", thinking: false }), {
+  assert.deepEqual(normalizeModelSelection({ model: "deepseek-v4-flash" }), {
     model: "deepseek-v4-flash",
-    thinking: "disabled",
   });
   assert.throws(
-    () => normalizeModelSelection({ model: "deepseek-chat", thinking: true }),
+    () => normalizeModelSelection({ model: "deepseek-chat" }),
     /unsupported model/iu,
   );
 });
 
-test("bot template forwards the selected thinking mode", async () => {
+test("bot template keeps /ask thinking enabled and ignores the removed toggle", async () => {
   const deepseek = await readFile("template/src/deepseek.ts", "utf8");
   const queue = await readFile("template/src/queue.ts", "utf8");
-  const testConfig = await readFile("template/wrangler.test.jsonc", "utf8");
   assert.match(deepseek, /thinking:\s*\{\s*type:/u);
-  assert.match(queue, /DEEPSEEK_THINKING_MODE/u);
-  assert.match(testConfig, /"DEEPSEEK_THINKING_MODE":\s*"disabled"/u);
-});
-
-test("requires an explicit boolean thinking choice", () => {
-  assert.throws(
-    () => normalizeModelSelection({ model: "deepseek-v4-pro", thinking: "yes" }),
-    /thinking must be a boolean/iu,
-  );
+  assert.doesNotMatch(queue, /DEEPSEEK_THINKING_MODE/u);
+  assert.match(queue, /thinking: "enabled"/u);
 });

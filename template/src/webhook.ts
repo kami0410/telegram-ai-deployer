@@ -30,6 +30,7 @@ import {
   saveReplyFeedback,
   type ReplyFeedbackKind,
 } from "./storage/reply-feedback-repository";
+import { attachProactiveOutcome } from "./storage/proactive-decision-repository";
 
 const WEBHOOK_PATH = "/telegram/webhook";
 const MAX_UPDATE_BYTES = 64 * 1_024;
@@ -340,6 +341,11 @@ export async function handleWebhook(
             { text: "确认长期使用", callback_data: `ip:c:${feedback.draft.id}` },
             { text: "取消", callback_data: `ip:x:${feedback.draft.id}` },
           ]] } },
+        );
+      }
+      if (feedback.saved) {
+        await attachProactiveOutcome(
+          env.DB, owner.ownerId, now, true, Number(adjustmentFeedback[2]),
         );
       }
       await markIfPresent(env.DB, callback.updateId, "completed", now);

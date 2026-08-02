@@ -4,7 +4,7 @@ import { renderRecoveryPage } from "../src/recovery-page";
 describe("recovery setup page", () => {
   it("uses browser crypto and submits only the new hash", () => {
     const page = renderRecoveryPage({
-      challengeId: "example-setup-challenge",
+      challengeId: "challenge-fixture-setup",
       purpose: "setup",
       nonce: "fixed-test-nonce",
     });
@@ -22,7 +22,7 @@ describe("recovery setup page", () => {
 
   it("requires the old key only during recovery", () => {
     const page = renderRecoveryPage({
-      challengeId: "example-recovery-challenge",
+      challengeId: "challenge-fixture-recover",
       purpose: "recover",
       nonce: "fixed-test-nonce",
     });
@@ -35,7 +35,7 @@ describe("recovery setup page", () => {
 
   it("初次设置不误报为账号迁移", () => {
     const page = renderRecoveryPage({
-      challengeId: "example-setup-challenge",
+      challengeId: "challenge-fixture-setup",
       purpose: "setup",
       nonce: "fixed-test-nonce",
     });
