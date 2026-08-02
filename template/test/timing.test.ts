@@ -70,6 +70,36 @@ describe("natural reply timing", () => {
     expect(bubbles.join("")).toBe(text);
     expect(bubbles.every((bubble) => bubble.trim().length > 0)).toBe(true);
   });
+
+  it("keeps the last bubble short instead of dumping surplus sentences into it", () => {
+    const text =
+      "第一句先听你说。第二句认真回应你。第三句再说一个角度。第四句给一个结论。第五句一起加油。第六句收尾。";
+    const bubbles = splitSemanticBubbles(text);
+
+    expect(bubbles.join("")).toBe(text);
+    expect(bubbles.at(-1)).toBe("第六句收尾。");
+    expect(bubbles.at(-2)).toBe("第五句一起加油。");
+  });
+
+  it("turns paragraphs into bubbles when the budget allows", () => {
+    const text = "先说第一件事。\n\n再说第二件事。\n\n最后说第三件事。";
+    const bubbles = splitSemanticBubbles(text);
+
+    expect(bubbles.join("")).toBe(text);
+    expect(bubbles).toHaveLength(3);
+    expect(bubbles[1]).toContain("第二件事");
+    expect(bubbles[2]).toContain("第三件事");
+  });
+
+  it("merges the shortest paragraphs when there are more than the bubble cap", () => {
+    const text =
+      "一号段。\n\n二号段。\n\n中间这一段内容比较长，用来占住空间。\n\n四号段。\n\n五号段。";
+    const bubbles = splitSemanticBubbles(text, "comfort");
+
+    expect(bubbles.join("")).toBe(text);
+    expect(bubbles.length).toBeLessThanOrEqual(4);
+    expect(bubbles.at(-1)?.trim()).toBe("五号段。");
+  });
 });
 
 describe("low-frequency busy mode", () => {

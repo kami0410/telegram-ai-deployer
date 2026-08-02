@@ -30,6 +30,7 @@ See the [first-use troubleshooting guide](docs/first-use-troubleshooting-zh.md) 
 
 ## Recent template updates
 
+- **v1.2.1**: improved reply bubble splitting — paragraph breaks become bubble boundaries, surplus sentences merge from the front, and oversized paragraphs merge with their shortest neighbor, so the last bubble stays short and free of long newline runs.
 - **v1.2.0**: the generated bot template is synced with the latest version: memory graph (`memory_graph`), identity core (`identity_core`), memory recall traces (`memory_recall_traces`), proactive decision records and quality event statistics; the management panel adds Relationship and Recall views; `/ask` always uses thinking mode (the obsolete thinking toggle is removed); a public status page and the Telegram bot avatar are included; six new D1 migrations (`0016`–`0021`); release quality evaluation and release gate tooling (`evaluate:realism` / `release:gate`).
 - **v1.1.0 stable**: proactive contact now runs 2–3 times per Beijing day with at least four hours between contacts; a missing reply no longer blocks a later natural topic, while pending user messages take priority and delay proactive contact by one hour.
 - **v1.0.0 stable**: long-term memories must be grounded in user-authored text; low-relevance memories are no longer injected automatically; malformed model responses are retried with a short fallback; historical failed jobs no longer block proactive contact; queue logs omit chat content; and generated projects include encrypted full-D1 backup and restore tools.
@@ -90,7 +91,7 @@ By using the tool you confirm that you have read and accepted [DISCLAIMER.md](DI
 
 ## Status and roadmap
 
-- Current status: `v1.2.0` stable. The software is still provided without warranty; keep encrypted backups of important data.
+- Current status: `v1.2.1` stable. The software is still provided without warranty; keep encrypted backups of important data.
 - Roadmap: more management-panel features for generated bots, deeper deployment recovery and diagnostics, and more multilingual documentation.
 
 ## Documentation
