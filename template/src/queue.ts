@@ -19,6 +19,7 @@ import {
   type DeliveryFlow,
 } from "./reply-delivery";
 import { createTelegramClient, TelegramError } from "./telegram";
+import { describeImage, type VisionAi } from "./image-vision";
 import {
   appendMessage,
   countUnsummarizedPersonaMessages,
@@ -150,6 +151,7 @@ export type QueueJob =
       ownerId: number;
       telegramUpdateId: number;
       messageId: number;
+      imageKey?: string;
     }
   | { type: "typing"; deliveryId: number }
   | { type: "bubble"; deliveryId: number }
@@ -193,6 +195,7 @@ export interface QueueDependencies {
   busyProbabilityPercent?: number;
   dailyMessageLimit?: number;
   semanticMemory?: { ai: EmbeddingAi; index: MemoryVectorIndex };
+  vision?: (base64: string) => Promise<string>;
 }
 
 interface SourceMessageRow {
@@ -885,6 +888,43 @@ async function processReplyGroup(
   }
 }
 
+async function attachImageDescription(
+  job: Extract<QueueJob, { type: "chat" }>,
+  messageId: number,
+  env: Env,
+  dependencies: QueueDependencies,
+): Promise<void> {
+  if (job.imageKey === undefined) return;
+  const cached = await env.IMAGE_CACHE.get(job.imageKey, "text").catch(() => null);
+  if (cached === null) return;
+  await env.IMAGE_CACHE.delete(job.imageKey).catch(() => undefined);
+  const row = await env.DB.prepare(
+    "SELECT content FROM messages WHERE id = ?",
+  ).bind(messageId).first<{ content: string }>();
+  if (row === null || row.content.includes("图片描述")) return;
+  const vision =
+    dependencies.vision ??
+    (async (base64: string) =>
+      describeImage(env.AI as unknown as VisionAi, env.VISION_MODEL, base64));
+  let description: string | null = null;
+  try {
+    description = await vision(cached);
+  } catch {
+    description = null;
+  }
+  const marker =
+    description === null
+      ? "[图片描述：无法识别]"
+      : `[图片描述：${description}]`;
+  const updated =
+    row.content.length === 0 || row.content === "[图片]"
+      ? marker
+      : `${row.content}\n${marker}`;
+  await env.DB.prepare(
+    "UPDATE messages SET content = ? WHERE id = ?",
+  ).bind(updated, messageId).run();
+}
+
 async function processChat(
   job: Extract<QueueJob, { type: "chat" }>,
   env: Env,
@@ -893,6 +933,9 @@ async function processChat(
   const source = await loadSourceMessage(env.DB, job);
   if (source === null) return;
   const now = dependencies.now?.() ?? Math.floor(Date.now() / 1_000);
+  if (job.imageKey !== undefined) {
+    await attachImageDescription(job, source.id, env, dependencies);
+  }
   if (job.mode === "persona" && isPersonaCorrectionText(source.content)) {
     await processPersonaDraft(
       {
@@ -1126,6 +1169,7 @@ async function processBusyResume(
        WHERE messages.owner_id = ? AND messages.role = 'user'
          AND messages.mode = 'persona'
          AND processed_updates.status IN ('queued', 'received', 'failed')
+         AND (processed_updates.last_error_code IS NULL OR processed_updates.last_error_code NOT IN ('dlq_exhausted'))
          AND processed_updates.assistant_message_id IS NULL
        ORDER BY messages.id`,
     )
@@ -1900,7 +1944,7 @@ function isSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value);
 }
 
-function isQueueJob(value: unknown): value is QueueJob {
+export function isQueueJob(value: unknown): value is QueueJob {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   switch (value.type) {
     case "chat":

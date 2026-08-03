@@ -15,8 +15,12 @@
     "MAX_OUTPUT_TOKENS": "100",
     "DAILY_MESSAGE_LIMIT": "200",
     "MEMORY_UPDATE_INTERVAL": "8",
-    "PUBLIC_BASE_URL": "https://example.invalid"
+    "PUBLIC_BASE_URL": "https://example.invalid",
+    "VISION_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct"
   },
+  "kv_namespaces": [
+    { "binding": "IMAGE_CACHE", "id": "00000000-0000-0000-0000-000000000000" }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
@@ -49,6 +53,13 @@
         "dead_letter_queue": "personal-telegram-ai-bot-dlq",
         "max_concurrency": 1,
         "retry_delay": 10
+      },
+      {
+        "queue": "personal-telegram-ai-bot-dlq",
+        "max_batch_size": 5,
+        "max_batch_timeout": 30,
+        "max_retries": 0,
+        "max_concurrency": 1
       }
     ]
   },

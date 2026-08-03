@@ -154,6 +154,59 @@ describe("DeepSeek chat client", () => {
 });
 
 describe("DeepSeek memory extraction", () => {
+  it("requires explicit stable preferences to be extracted as facts, not buried in episodes", async () => {
+    let promptContent = "";
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      const body: unknown = JSON.parse(String(init?.body));
+      if (typeof body === "object" && body !== null && "messages" in body) {
+        const messages = (body as { messages: Array<{ role: string; content: string }> }).messages;
+        promptContent = messages.find((message) => message.role === "system")?.content ?? "";
+      }
+      return jsonResponse({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                summary: "用户说了吃辣的事。",
+                through_message_id: 12,
+                stable_facts: [{
+                  category: "preference",
+                  fact_key: "spicy_food",
+                  fact_value: "OWNER 喜欢吃辣",
+                  confidence: "high",
+                  source_message_id: 12,
+                }],
+                episodes: [{
+                  category: "interest",
+                  content: "用户今天吃了板面并加了很多辣",
+                  people: [],
+                  topics: [],
+                  occurred_at: 1_750_000_000,
+                  source_message_id: 12,
+                }],
+              }),
+            },
+          },
+        ],
+        usage: { prompt_tokens: 30, completion_tokens: 20, total_tokens: 50 },
+      });
+    });
+
+    await expect(
+      requestMemoryUpdate(options(fetcher), {
+        previousSummary: null,
+        sourceMessages: [
+          { id: 12, role: "user", content: "我今天吃的板面，我加了好多辣，我喜欢吃辣" },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      stableFacts: [{ factKey: "spicy_food", factValue: "OWNER 喜欢吃辣" }],
+      episodes: [{ content: "用户今天吃了板面并加了很多辣" }],
+    });
+    expect(promptContent).toContain("“我喜欢/我爱/我更喜欢/我习惯/我一直”");
+    expect(promptContent).toContain("必须单独提取为 stable_fact");
+  });
+
   it("accepts only explicit categories, confidence, and source message IDs", async () => {
     const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
       const body: unknown = JSON.parse(String(init?.body));
@@ -262,7 +315,7 @@ describe("DeepSeek memory extraction", () => {
             },
             {
               kind: "shared_moment",
-              value: "Persona 今天陪 OWNER 去了图书馆",
+              value: "Yuan 今天陪 OWNER 去了图书馆",
               source_message_id: 11,
               evidence: "陪你去了图书馆",
             },
@@ -305,7 +358,7 @@ describe("DeepSeek memory extraction", () => {
             },
             {
               type: "place",
-              key: "persona_location",
+              key: "yuan_location",
               value: "图书馆",
               confidence: "high",
               source_message_id: 11,

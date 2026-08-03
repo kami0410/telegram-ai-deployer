@@ -17,6 +17,7 @@ test("derives isolated Cloudflare resource names", () => {
     deadLetterQueue: "example-bot-dlq",
     vectorize: "example-bot-memory",
     workflow: "example-bot-reminders",
+    imageCache: "example-bot-image-cache",
   });
 });
 

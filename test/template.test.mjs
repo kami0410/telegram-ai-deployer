@@ -66,12 +66,17 @@ test("renders selected model without secrets", () => {
       deadLetterQueue: "example-bot-dlq",
       vectorize: "example-bot-memory",
       workflow: "example-bot-reminders",
+      imageCache: "example-bot-image-cache",
     },
     databaseId: "00000000-0000-0000-0000-000000000000",
+    imageCacheId: "00000000-0000-0000-0000-000000000001",
     workerUrl: "https://example.invalid",
     model: "deepseek-v4-flash",
   });
   assert.match(config, /"DEEPSEEK_MODEL": "deepseek-v4-flash"/u);
+  assert.match(config, /"IMAGE_CACHE"/u);
+  assert.match(config, /"VISION_MODEL"/u);
+  assert.match(config, /"queue": "example-bot-dlq"/u);
   assert.doesNotMatch(config, /DEEPSEEK_THINKING_MODE/u);
   assert.doesNotMatch(config, /TELEGRAM_BOT_TOKEN|DEEPSEEK_API_KEY/u);
 });

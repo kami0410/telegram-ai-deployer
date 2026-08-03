@@ -7,6 +7,7 @@ import {
 } from "./storage/chat-preferences-repository";
 import { getEligibleOpenThreadFollowUp } from "./storage/relationship-repository";
 import { evaluateProactivePolicy } from "./proactive-policy";
+import { markUpdate } from "./storage/update-repository";
 import {
   isRecentProactiveTopic,
   markExpiredProactiveIgnored,
@@ -106,13 +107,13 @@ async function ensureTelegramManagementConfiguration(
   dependencies: ScheduledDependencies,
   now: number,
 ): Promise<void> {
+  const baseUrl = new URL(env.PUBLIC_BASE_URL);
+  const appUrl = new URL("/app", baseUrl).toString();
   const configured = await env.DB.prepare(
     "SELECT value FROM bot_configuration WHERE key = 'telegram_management_v1'",
   ).first<{ value: string }>();
-  if (configured?.value === "configured") return;
-  const baseUrl = new URL(env.PUBLIC_BASE_URL);
+  if (configured?.value === appUrl) return;
   const webhookUrl = new URL("/telegram/webhook", baseUrl).toString();
-  const appUrl = new URL("/app", baseUrl).toString();
   await createTelegramClient(
     env.TELEGRAM_BOT_TOKEN,
     dependencies.fetcher,
@@ -123,10 +124,10 @@ async function ensureTelegramManagementConfiguration(
   });
   await env.DB.prepare(
     `INSERT INTO bot_configuration (key, value, updated_at)
-     VALUES ('telegram_management_v1', 'configured', ?)
+     VALUES ('telegram_management_v1', ?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value,
        updated_at = excluded.updated_at`,
-  ).bind(now).run();
+  ).bind(appUrl, now).run();
 }
 
 interface RuntimeScheduleRow {
@@ -248,6 +249,8 @@ export async function handleScheduled(
   const random = dependencies.random ?? cryptoRandom;
   await cleanupExpired(env.DB, now);
   await recoverStaleReminderDeliveries(env, dependencies, now);
+  await recoverStaleDeliveries(env, dependencies, now);
+  await recoverStuckUpdates(env, dependencies, now);
   await ensureTelegramManagementConfiguration(env, dependencies, now);
 
   const owner = await env.DB
@@ -456,4 +459,141 @@ export async function recoverStaleReminderDeliveries(
   }
   if (firstError !== null) throw firstError;
   return stale.length;
+}
+
+const STALE_DELIVERY_WINDOW_SECONDS = 10 * 60;
+const MAX_DELIVERY_RECOVERY_ATTEMPTS = 3;
+const STALE_PROCESSING_WINDOW_SECONDS = 30 * 60;
+const MAX_UPDATE_RECOVERY_ATTEMPTS = 3;
+
+/**
+ * 重推滞留的气泡投递：pending/sending/failed 且超过 10 分钟未完成的任务，
+ * 重新入队 bubble 作业。markDeliverySending 支持 pending/failed/过期 sending
+ * 重新认领，continueBubbleSequence 会把后续气泡链继续推下去。
+ * 以 attempt_count 封顶（3 次），避免永久错误无限重试。
+ */
+export async function recoverStaleDeliveries(
+  env: Env,
+  dependencies: ScheduledDependencies,
+  now: number,
+): Promise<number> {
+  const stuck = await env.DB.prepare(
+    `SELECT id, kind
+     FROM deliveries
+     WHERE status IN ('pending', 'sending', 'failed')
+       AND attempt_count < ?
+       AND updated_at <= ?
+     ORDER BY id
+     LIMIT 20`,
+  ).bind(
+    MAX_DELIVERY_RECOVERY_ATTEMPTS,
+    now - STALE_DELIVERY_WINDOW_SECONDS,
+  ).all<{ id: number; kind: string }>();
+  let recovered = 0;
+  let firstError: unknown = null;
+  for (const delivery of stuck.results) {
+    if (delivery.kind === "typing") continue;
+    try {
+      await queueSender(env, dependencies).send({
+        type: "bubble",
+        deliveryId: delivery.id,
+      });
+      recovered += 1;
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError !== null) throw firstError;
+  return recovered;
+}
+
+interface StuckUpdateRow {
+  telegram_update_id: number;
+  owner_id: number;
+  message_id: number | null;
+  mode: string | null;
+}
+
+/**
+ * 恢复卡死的消息处理：
+ * - processing 超过 30 分钟且尚未生成回复 → 标记 failed(stale_processing) 并重新入队；
+ * - failed 且错误码属于暂时性错误 → 重新入队（attempt_count 封顶）。
+ * 入队前已标记 dlq_exhausted 的更新不再重复处理（由死信写回保证终态）。
+ */
+export async function recoverStuckUpdates(
+  env: Env,
+  dependencies: ScheduledDependencies,
+  now: number,
+): Promise<number> {
+  const staleProcessing = await env.DB.prepare(
+    `SELECT p.telegram_update_id, p.owner_id,
+            (SELECT m.id FROM messages m
+             WHERE m.telegram_update_id = p.telegram_update_id
+               AND m.role = 'user' AND m.owner_id = p.owner_id
+             ORDER BY m.id LIMIT 1) AS message_id,
+            (SELECT m.mode FROM messages m
+             WHERE m.telegram_update_id = p.telegram_update_id
+               AND m.role = 'user' AND m.owner_id = p.owner_id
+             ORDER BY m.id LIMIT 1) AS mode
+     FROM processed_updates p
+     WHERE p.status = 'processing'
+       AND p.updated_at <= ?
+       AND p.assistant_message_id IS NULL
+     ORDER BY p.updated_at
+     LIMIT 20`,
+  ).bind(now - STALE_PROCESSING_WINDOW_SECONDS).all<StuckUpdateRow>();
+
+  const retryableFailed = await env.DB.prepare(
+    `SELECT p.telegram_update_id, p.owner_id,
+            (SELECT m.id FROM messages m
+             WHERE m.telegram_update_id = p.telegram_update_id
+               AND m.role = 'user' AND m.owner_id = p.owner_id
+             ORDER BY m.id LIMIT 1) AS message_id,
+            (SELECT m.mode FROM messages m
+             WHERE m.telegram_update_id = p.telegram_update_id
+               AND m.role = 'user' AND m.owner_id = p.owner_id
+             ORDER BY m.id LIMIT 1) AS mode
+     FROM processed_updates p
+     WHERE p.status = 'failed'
+       AND p.attempt_count < ?
+       AND p.assistant_message_id IS NULL
+       AND p.last_error_code IN ('model_failed', 'queue_send_failed', 'delivery_plan_create_failed', 'stale_processing')
+     ORDER BY p.updated_at
+     LIMIT 20`,
+  ).bind(MAX_UPDATE_RECOVERY_ATTEMPTS).all<StuckUpdateRow>();
+
+  let recovered = 0;
+  let firstError: unknown = null;
+  const enqueue = async (update: StuckUpdateRow): Promise<void> => {
+    if (update.message_id === null || (update.mode !== "persona" && update.mode !== "ask")) {
+      return;
+    }
+    try {
+      await queueSender(env, dependencies).send({
+        type: "chat",
+        mode: update.mode,
+        ownerId: update.owner_id,
+        telegramUpdateId: update.telegram_update_id,
+        messageId: update.message_id,
+      });
+      recovered += 1;
+    } catch (error) {
+      firstError ??= error;
+    }
+  };
+  for (const update of staleProcessing.results) {
+    await markUpdate(
+      env.DB,
+      update.telegram_update_id,
+      "failed",
+      now,
+      "stale_processing",
+    ).catch(() => undefined);
+    await enqueue(update);
+  }
+  for (const update of retryableFailed.results) {
+    await enqueue(update);
+  }
+  if (firstError !== null) throw firstError;
+  return recovered;
 }

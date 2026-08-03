@@ -9,8 +9,12 @@
     "MAX_OUTPUT_TOKENS": "100",
     "DAILY_MESSAGE_LIMIT": "200",
     "MEMORY_UPDATE_INTERVAL": "8",
-    "PUBLIC_BASE_URL": "https://yuan.example"
+    "PUBLIC_BASE_URL": "https://yuan.example",
+    "VISION_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct"
   },
+  "kv_namespaces": [
+    { "binding": "IMAGE_CACHE", "id": "00000000-0000-0000-0000-000000000002" }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

@@ -1,5 +1,6 @@
 import { handleOwnerCommand, parseCommand } from "./commands";
 import { secureEqual } from "./security";
+import { fetchTelegramFileBase64 } from "./image-vision";
 import { cancelPersonaDraft } from "./storage/management-repository";
 import {
   confirmPersonaDraft,
@@ -65,6 +66,7 @@ interface QueueChatJob {
   ownerId: number;
   telegramUpdateId: number;
   messageId: number;
+  imageKey?: string;
 }
 
 interface QueuePersonaDraftJob {
@@ -121,6 +123,60 @@ export function parsePrivateTextUpdate(value: unknown): PrivateTextUpdate | null
     chatId: message.chat.id,
     date: message.date,
     text: message.text,
+  };
+}
+
+export interface PrivatePhotoUpdate {
+  updateId: number;
+  messageId: number;
+  userId: number;
+  chatId: number;
+  date: number;
+  fileId: string;
+  caption: string | null;
+}
+
+export function parsePrivatePhotoUpdate(value: unknown): PrivatePhotoUpdate | null {
+  if (!isRecord(value) || !safeInteger(value.update_id) || !isRecord(value.message)) {
+    return null;
+  }
+  const message = value.message;
+  if (
+    !safeInteger(message.message_id) ||
+    !safeInteger(message.date) ||
+    !Array.isArray(message.photo) ||
+    !isRecord(message.from) ||
+    !safeInteger(message.from.id) ||
+    message.from.is_bot === true ||
+    !isRecord(message.chat) ||
+    !safeInteger(message.chat.id) ||
+    message.chat.type !== "private"
+  ) {
+    return null;
+  }
+  let largestFileId: string | null = null;
+  let largestSize = -1;
+  for (const size of message.photo) {
+    if (!isRecord(size) || typeof size.file_id !== "string") continue;
+    const bytes = safeInteger(size.file_size) ? size.file_size : -1;
+    if (bytes > largestSize) {
+      largestFileId = size.file_id;
+      largestSize = bytes;
+    }
+  }
+  if (largestFileId === null) return null;
+  const caption =
+    typeof message.caption === "string" && message.caption.length > 0
+      ? message.caption.slice(0, 4_096)
+      : null;
+  return {
+    updateId: value.update_id,
+    messageId: message.message_id,
+    userId: message.from.id,
+    chatId: message.chat.id,
+    date: message.date,
+    fileId: largestFileId,
+    caption,
   };
 }
 
@@ -240,6 +296,89 @@ async function findMessageIdByUpdate(
     .bind(ownerId, telegramUpdateId)
     .first<{ id: number }>();
   return row?.id ?? null;
+}
+
+const IMAGE_CACHE_TTL_SECONDS = 15 * 60;
+
+/**
+ * 图片消息：下载图片 → base64 临时存 KV（15 分钟 TTL）→
+ * 图片本身不落库，队列任务只携带 KV key，消费时转文字描述进对话和记忆。
+ */
+async function handlePhotoUpdate(
+  photo: PrivatePhotoUpdate,
+  env: Env,
+  dependencies: WebhookDependencies,
+  now: number,
+): Promise<Response> {
+  const owner = await getOwner(env.DB);
+  if (owner === null) return ok();
+  if (owner.telegramUserId !== photo.userId || owner.telegramChatId !== photo.chatId) {
+    return ok();
+  }
+  const claim = await claimUpdate(env.DB, photo.updateId, owner.ownerId, now);
+  if (claim === "duplicate") return ok();
+
+  let base64: string;
+  try {
+    base64 = await fetchTelegramFileBase64(
+      env.TELEGRAM_BOT_TOKEN,
+      photo.fileId,
+      dependencies.fetcher,
+    );
+  } catch {
+    await markIfPresent(env.DB, photo.updateId, "failed", now, "image_download_failed");
+    return ok();
+  }
+  const imageKey = `img:${photo.updateId}`;
+  try {
+    await env.IMAGE_CACHE.put(imageKey, base64, {
+      expirationTtl: IMAGE_CACHE_TTL_SECONDS,
+    });
+  } catch {
+    await markIfPresent(env.DB, photo.updateId, "failed", now, "image_cache_failed");
+    return ok();
+  }
+
+  const content = photo.caption ?? "[图片]";
+  let messageId =
+    claim === "requeue"
+      ? await findMessageIdByUpdate(env.DB, owner.ownerId, photo.updateId)
+      : null;
+  if (messageId === null) {
+    const conversation = await getOrCreateActiveConversation(
+      env.DB,
+      owner.ownerId,
+      now,
+    );
+    const message = await appendMessage(env.DB, {
+      ownerId: owner.ownerId,
+      conversationId: conversation.conversationId,
+      role: "user",
+      mode: "persona",
+      content,
+      telegramMessageId: photo.messageId,
+      telegramUpdateId: photo.updateId,
+      createdAt: now,
+    });
+    messageId = message.messageId;
+  }
+
+  const queue = dependencies.queue ?? env.MESSAGE_QUEUE;
+  try {
+    await queue.send({
+      type: "chat",
+      mode: "persona",
+      ownerId: owner.ownerId,
+      telegramUpdateId: photo.updateId,
+      messageId,
+      imageKey,
+    });
+    await markIfPresent(env.DB, photo.updateId, "queued", now);
+  } catch {
+    await markIfPresent(env.DB, photo.updateId, "failed", now, "queue_send_failed");
+    return new Response("Temporary failure", { status: 500 });
+  }
+  return ok();
 }
 
 export async function handleWebhook(
@@ -520,7 +659,13 @@ export async function handleWebhook(
     return ok();
   }
   const update = parsePrivateTextUpdate(rawUpdate);
-  if (update === null) return ok();
+  if (update === null) {
+    const photoUpdate = parsePrivatePhotoUpdate(rawUpdate);
+    if (photoUpdate !== null) {
+      return handlePhotoUpdate(photoUpdate, env, dependencies, now);
+    }
+    return ok();
+  }
 
   const queue = dependencies.queue ?? env.MESSAGE_QUEUE;
   const owner = await getOwner(env.DB);

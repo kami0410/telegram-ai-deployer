@@ -90,7 +90,7 @@ it("configures Telegram management exactly once after a successful API call", as
   expect(methods).toEqual(["setWebhook", "setChatMenuButton"]);
   expect(await env.DB.prepare(
     "SELECT value FROM bot_configuration WHERE key = 'telegram_management_v1'",
-  ).first()).toEqual({ value: "configured" });
+  ).first()).toEqual({ value: new URL("/app", env.PUBLIC_BASE_URL).toString() });
 });
 
 it("queues bounded pending vector synchronization work", async () => {

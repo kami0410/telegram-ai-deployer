@@ -1,5 +1,6 @@
 import { handleRecoveryHttp } from "./recovery";
 import { processQueueBatch } from "./queue";
+import { handleDlqBatch } from "./dlq";
 import { handleScheduled } from "./scheduled";
 import { handleWebhook } from "./webhook";
 import { handleAppApi } from "./app-api";
@@ -18,7 +19,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/") {
-      return renderPublicPage();
+      return renderPublicPage(env);
     }
 
     if (url.pathname.startsWith("/api/app/")) {
@@ -61,6 +62,10 @@ export default {
     env: Env,
     _ctx: ExecutionContext,
   ): Promise<void> {
+    if (batch.queue.endsWith("-dlq")) {
+      await handleDlqBatch(batch, env);
+      return;
+    }
     await processQueueBatch(batch, env);
   },
 

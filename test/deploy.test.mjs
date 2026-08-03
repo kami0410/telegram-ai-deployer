@@ -19,7 +19,7 @@ function fakeDependencies({ failAt = null, existingState = null } = {}) {
   const calls = [];
   const methods = {};
   for (const step of [
-    "environment", "template", "d1", "queues", "vectorize", "migration",
+    "environment", "template", "d1", "kv", "queues", "vectorize", "migration",
     "first-deploy", "secrets", "final-deploy", "webhook", "health",
   ]) {
     methods[step] = async () => {
@@ -52,7 +52,7 @@ test("emits ordered progress and never persists secrets", async () => {
   assert.deepEqual(
     fixture.events.filter((event) => event.status === "succeeded").map((event) => event.step),
     [
-      "environment", "template", "d1", "queues", "vectorize", "migration",
+      "environment", "template", "d1", "kv", "queues", "vectorize", "migration",
       "first-deploy", "secrets", "final-deploy", "webhook", "health",
     ],
   );
@@ -63,7 +63,7 @@ test("emits ordered progress and never persists secrets", async () => {
 test("records a recoverable failure without marking the step complete", async () => {
   const fixture = fakeDependencies({ failAt: "vectorize" });
   await assert.rejects(() => runDeployment(exampleInput, fixture.dependencies), /failed-vectorize/u);
-  assert.deepEqual(fixture.calls, ["environment", "template", "d1", "queues", "vectorize"]);
+  assert.deepEqual(fixture.calls, ["environment", "template", "d1", "kv", "queues", "vectorize"]);
   assert.deepEqual(fixture.events.at(-1), {
     step: "vectorize",
     status: "failed",
@@ -102,7 +102,7 @@ test("resume skips completed steps but requires freshly supplied secrets", async
     outputDir: "D:\\Bots\\example-bot",
     model: "deepseek-v4-flash",
     thinking: "disabled",
-    completedSteps: ["environment", "template", "d1", "queues"],
+    completedSteps: ["environment", "template", "d1", "kv", "queues"],
     resources: {},
     workerUrl: null,
     updatedAt: "2026-07-29T00:00:00.000Z",
@@ -124,7 +124,7 @@ test("resume replays secret-dependent tail after an application restart", async 
     model: "deepseek-v4-flash",
     thinking: "disabled",
     completedSteps: [
-      "environment", "template", "d1", "queues", "vectorize", "migration",
+      "environment", "template", "d1", "kv", "queues", "vectorize", "migration",
       "first-deploy", "secrets", "final-deploy",
     ],
     resources: {},
